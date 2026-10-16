@@ -1,29 +1,45 @@
 # Neko Video
 
-让麦麦读取视频资料、看抖音图文图片，并按需发送原媒体的 MaiBot 插件。
+**让麦麦看懂分享，而不是只看见一条链接。**
 
-独立项目，插件ID为 **`neko.video`**。不是旧插件的同名覆盖更新，也不自动读取或迁移旧插件数据。代码来源及MIT归属见[NOTICE](NOTICE.md)和[LICENSE](LICENSE)。
+为 MaiBot 提供 B站/抖音资料读取、抖音图文看图和按需媒体发送。模型看到的是实际图片预览，不是让它凭图片地址猜画面；已有资料直接用于聊天，不额外群发解析卡片。
 
-## 能做什么
+[下载安装包](https://github.com/znzsofficial/neko-video/releases/latest) · [安全与隐私](SECURITY.md) · [更新记录](CHANGELOG.md)
+
+## 使用起来
+
+- **分享视频**：自动补充标题、作者和平台可提供的总结、章节等文字资料。没有总结就明确缺失，不冒充看过视频。
+- **“看看这篇图文里的图片”**：麦麦按需读取抖音图片，每次最多4张，可以继续看后面的图片。需要支持视觉的Planner模型。
+- **“把第2张原图发给我”**：按本聊天里的媒体编号发送选中的原文件，不拿压缩预览充当原图。
+- **“发这个小视频/实况”**：下载并校验后再交给QQ发送，单项上限8MiB。不会自动下载整套图集或长视频。
+
+> 视频目前只提供封面、资料和原媒体发送，**不包含完整视频抽帧理解或转写**。能看到封面不等于看过视频。模型是否调用工具、平台是否返回资料，都不保证每次成功。
+
+### 四个短提示工具
 
 | 工具 | 用途 |
 | --- | --- |
-| `neko_video_bilibili` | B站标题、作者、简介与平台AI总结 |
-| `neko_video_douyin` | 抖音资料、平台AI总结、高光及章节 |
-| `neko_video_read` | 抖音图文真实图片预览；视频只取封面与媒体编号 |
-| `neko_video_send` | 在QQ中按编号发送选中的原图、小视频或实况 |
+| `neko_video_bilibili` | B站资料与平台AI总结 |
+| `neko_video_douyin` | 抖音平台总结、高光与章节 |
+| `neko_video_read` | 抖音图文图片、视频封面与媒体编号 |
+| `neko_video_send` | 在QQ发送选中的原图、小视频或实况 |
 
-群聊/私聊分享可自动附加**文字资料**，不自动发QQ、不把每条分享送给第三方媒体解析器。看图由模型按需调用读取工具，需要视觉Planner。原图发送与模型预览分开；不把封面说成已看过视频，不实现完整视频抽帧/转写。
+自动处理只附加**文字资料**，不会自动发QQ或逐条调用第三方媒体接口。看图和发送由模型按需选择。工具说明保持短句：每项≤45字，全部四项≤150字，由测试约束。
 
-工具用途保持短句，每项不超过45字、全部四项不超过150字，由测试约束。
+## 安装与启用
 
-## 安装
+要求 **MaiBot ≥1.3.9、SDK ≥2.12、Python ≥3.12**。
 
-需要 **MaiBot >=1.3.9、SDK >=2.12、Python >=3.12**。下载Release的`neko-video-<version>.zip`，展开后的插件根目录应同时有`plugin.py`、`_manifest.json`和`neko_video/`，放入MaiBot的`plugins/neko-video/`，由宿主安装manifest声明依赖。
+1. 从[Release](https://github.com/znzsofficial/neko-video/releases/latest)下载ZIP，按同页`checksums.txt`核对SHA256。
+2. 解压到`plugins/neko-video/`，确保`plugin.py`、`_manifest.json`和`neko_video/`在同一插件根目录；由宿主安装manifest声明的依赖。
+3. 在WebUI检查解析范围、凭据及管理员名单，然后启用。首次安装**默认关闭**，不是安装后自动开始解析。
+4. 需要图文看图时，开启`parse.enable_douyin`和`media.enabled`，并确认Planner支持视觉。
 
-首次安装**默认关闭**，在WebUI检查配置后启用。不要同时启用旧内容理解插件和本项目的自动附加，以免重复处理；但也不要在未核实配置、凭据和功能前直接删除旧插件。
+插件ID为`neko.video`，不是旧内容理解插件的同名更新。不要同时启用两个插件的自动附加。项目不会自动搬运旧Cookie或删除旧数据；迁移时先备份，再将适用配置和凭据复制到新插件的独立数据目录。
 
-简化配置示例（不要用示例覆盖已有配置）：
+## 配置
+
+通常在WebUI修改即可。以下为简化示例，**不要直接覆盖已有配置**：
 
 ```toml
 [plugin]
@@ -38,11 +54,11 @@ enable_douyin = true
 cache_ttl_seconds = 1800
 
 [permission]
-admin_users = [] # 空名单拒绝登录管理命令；填可信发送者ID
+admin_users = [] # 填可信发送者ID；空名单禁止登录管理命令
 
 [media]
-enabled = true # 仍受总插件开关控制
-fallback_token = "" # 可改用服务器私有凭据文件
+enabled = true # 仍受总插件开关及enable_douyin控制
+fallback_token = "" # 可用服务器私有凭据文件代替
 
 [credential]
 sessdata = ""
@@ -52,41 +68,43 @@ dedeuserid = ""
 douyin_cookie = ""
 ```
 
-## 登录和权限
+### 登录与凭据
 
-- 管理员命令：`/neko-video login`、`/neko-video status`、`/neko-video logout`。管理员必须在`permission.admin_users`中；不通过“最近发言人”猜身份。
-- B站扫码结果保存在本插件data_dir的`credential.json`，优先于配置中的Cookie。登出只删除本插件扫码凭据；若配置中仍有Cookie，会明确提示继续清理设置。
-- 抖音Cookie只用于官方资料接口。缺少ttwid时可申请平台游客标识，存于`douyin-visitor.json`；不会把账号Cookie发给第三方。
-- 备选媒体Token可以放在`media.fallback_token`，或本插件data_dir下`douyin-media-secrets.json`的`fallback_token`字段，文件应为0600。源码、Release、测试和示例都不包含真实Token。
+| 命令 | 用途 |
+| --- | --- |
+| `/neko-video login` | 管理员扫码登录B站 |
+| `/neko-video status` | 管理员检查B站登录状态 |
+| `/neko-video logout` | 管理员清除本插件扫码凭据 |
 
-## 媒体边界
+- 管理员名单为空时拒绝以上命令；不根据“最近说话的人”猜身份。名单不限制模型的普通资料工具使用。
+- B站扫码凭据保存在本插件`data_dir/credential.json`，优先于配置Cookie。登出只清扫码文件；配置仍有Cookie时会明确提示继续清理。
+- 抖音Cookie只用于官方接口。游客标识可存于`douyin-visitor.json`，不会把账号Cookie发给第三方解析器。
+- 备选媒体接口Token放在`media.fallback_token`，或`data_dir/douyin-media-secrets.json`的`fallback_token`字段，后者应0600。**不要提交Token、Cookie或扫码链接到GitHub。**
 
-- 图片每批最多4张，`image_start`从0起继续；最多处理前64项。预览长边<=1280px、单张<=256KiB，整批原始预览<=1MiB，Base64另计。小字可能不清，不能承诺原画质。
-- 原文件<=8MiB；图像<=2000万像素，动图<=100帧且累计<=4000万像素。预览取首帧，原图发送重新下载并核对SHA256，不以预览冒充原图。
-- 视频/实况只做MP4容器头校验，不承诺完整解码、H.265可播或QQ兼容；超过8MiB拒绝，不自动转码/拆片。视频使用本次下载的单份Base64，不让NapCat自行访问不受控URL，也不把大视频字节保存到聊天DB或再注入模型历史。
-- 媒体编号绑定聊天，10分钟过期，全局128/单聊天24项，仅存元数据。跨聊天/过期/在途/已发/投递未知的编号不自动重发。平台确认请求不等于收件人显示成功，QQ仍可能压缩/转码。
-- 模型读取总期限45秒、发送55秒，含并发2槽排队；逐项失败保留成功预览。配置更新/卸载取消请求并清编号；已有普通聊天不清理。宿主16MiB聚合Hook限制没有被本插件取消。
-- 公网下载验证所有DNS结果并固定IP，保留Host/TLS SNI校验，重定向逐跳重查，拒绝内网/带凭据URL/非80或443端口。第三方解析器收到公开分享链接，主接口为明文HTTP；不能接受该信任模型时关闭`media.enabled`。详情见[SECURITY](SECURITY.md)。
+## 清晰度、大小与投递限制
 
-## 架构与开发
+| 项目 | 限制 |
+| --- | --- |
+| 模型看图 | 每次≤4张；`image_start`从0起翻页；最多处理前64项 |
+| 压缩预览 | 长边≤1280px、每张≤256KiB，整批原始预览≤1MiB；Base64另计 |
+| 原媒体 | 单项≤8MiB，不自动转码或拆片绕过限制 |
+| 图片解码 | ≤2000万像素；动图≤100帧且累计≤4000万像素，预览取首帧 |
+| 媒体编号 | 仅当前聊天、10分钟有效；每聊天24项、全局128项，仅缓存元数据 |
+| 请求期限 | 看图45秒、发送55秒，包含并发2槽的排队时间 |
 
-```text
-plugin.py                  # 宿主发现入口
-neko_video/
-  plugin.py                # SDK组件、会话和生命周期
-  config.py                # WebUI配置模型
-  official.py              # B站/抖音官方资料编排
-  parsers.py               # 纯响应解析
-  credentials.py           # 官方登录生命周期
-  storage.py               # 私有原子存储
-  transport.py             # 官方端点边界与响应上限
-  presentation.py          # 有界文字展示
-  cache.py                 # TTL元数据缓存
-  media_service.py         # 看图/原媒体投递编排
-  media.py                 # 匿名解析、公网下载、图片预览
-  assets.py                # 聊天隔离的媒体句柄
-tests/                     # 模拟网络与合成媒体，无QQ/模型调用
-```
+原图发送会重新下载并核对SHA256；原文件变了就要求重读，不发送旧预览替代。小字可能在预览压缩中丢失，QQ也可能再次压缩或转码。MP4仅检查容器头，不等于完整解码或保证QQ可播。
+
+在途、已发送或投递未确认的编号不会自动重发。平台确认请求不等于收件人已成功显示。视频二进制只用于本次投递，不保存到聊天数据库或再塞进模型历史。配置更新/卸载会取消请求并清理编号，普通聊天历史不删除；宿主16MiB聚合Hook限制仍然存在。
+
+## 第三方接口与隐私
+
+官方资料与第三方媒体解析使用不同客户端，后者只接收公开分享链接或视频ID，**不接收B站/抖音账号Cookie**。第三方接口不属于本项目，可能失效、限流或返回不完整内容。
+
+当前主媒体解析接口使用**明文HTTP**，沿途可能读取或修改请求和响应；只用于公开内容。不能接受该信任模型时关闭`media.enabled`，保留官方文字资料功能。下载媒体时会校验并固定公网IP、逐跳检查重定向，拒绝内网、凭据URL及非80/443端口；这些防护不等于认证第三方返回内容。详见[SECURITY.md](SECURITY.md)。
+
+## 开发与来源
+
+SDK接入、配置、官方解析、凭据、存储、展示和媒体投递分别位于`neko_video/`中的独立模块；`plugin.py`仅负责宿主发现。测试使用模拟网络和合成媒体，不登录账号、不发QQ、不调用模型。
 
 ```bash
 python -m pip install -e . ruff
@@ -96,6 +114,4 @@ ruff format --check .
 python scripts/build_release.py
 ```
 
-测试不登录真实账号、不发QQ、不调用真实模型或供应商。通过测试不代表第三方接口永久可用，或已经在所有QQ客户端端到端验收。新项目发布不等于自动迁移任何现有部署。
-
-License: MIT，见LICENSE及NOTICE。
+本项目为独立仓库，保留派生代码的作者和来源说明，不把独立建库等同于全部原创。采用MIT许可，见[LICENSE](LICENSE)与[NOTICE](NOTICE.md)。
