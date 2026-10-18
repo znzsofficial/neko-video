@@ -50,7 +50,9 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(sum(map(len, descriptions)), 150)
         sender = next(x for x in tools if x["name"] == "neko_video_send")
         self.assertEqual(sender["metadata"]["platforms"], ["qq"])
-        manifest = json.loads((Path(__file__).parents[1] / "_manifest.json").read_text())
+        manifest = json.loads(
+            (Path(__file__).parents[1] / "_manifest.json").read_text(encoding="utf-8")
+        )
         self.assertEqual(manifest["id"], "neko.video")
 
     async def test_host_style_package_discovery_entrypoint(self):

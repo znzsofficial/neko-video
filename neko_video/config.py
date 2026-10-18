@@ -42,7 +42,10 @@ class MediaSection(PluginConfigBase):
         default=256,
         ge=0,
         description="单个视频下载上限，单位MiB；0不设单文件上限。仍保留1GiB缓存、磁盘余量和超时保护，QQ也可能拒绝过大视频。",
-        json_schema_extra={"label": "视频大小上限（MiB，0为不限）"},
+        json_schema_extra={
+            "label": "视频大小上限（MiB，0为不限）",
+            "hint": "0不设单文件上限；缓存总计1GiB、磁盘余量和QQ自身限制仍然有效。",
+        },
     )
 
 

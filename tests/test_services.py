@@ -29,7 +29,7 @@ class PureServices(unittest.TestCase):
             p.write_text("{broken", encoding="utf-8")
             with self.assertRaises(StorageError):
                 write_json(p, {"SESSDATA": "replacement"})
-            self.assertEqual(p.read_text(), "{broken")
+            self.assertEqual(p.read_text(encoding="utf-8"), "{broken")
 
     def test_cookie_formats(self):
         self.assertEqual(cookie_dict("a=1; b=x=y"), {"a": "1", "b": "x=y"})
