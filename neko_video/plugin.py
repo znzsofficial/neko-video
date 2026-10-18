@@ -63,6 +63,7 @@ class NekoVideoPlugin(MaiBotPlugin):
         self.credentials = CredentialService(directory, self.config.credential, self.client)
         self.official = OfficialVideoService(self.config.parse, self.credentials, self.client)
         self.media = MediaService(self.config, self.ctx)
+        await self.media.start()
         self.ready = True
 
     async def _close(self):
@@ -223,9 +224,9 @@ class NekoVideoPlugin(MaiBotPlugin):
 
     @Tool(
         "neko_video_send",
-        description="发送本聊天编号对应的原图、小视频或实况。",
+        description="发送本聊天媒体编号对应的原图、视频或实况。",
         platforms=["qq"],
-        timeout_ms=60000,
+        timeout_ms=190000,
         parameters=[
             ToolParameterInfo(
                 name="media_id",

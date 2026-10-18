@@ -11,6 +11,7 @@ from .assets import MediaAssets
 from .media import MediaError, resolve_media, preview_result, download_image, validate_original
 from .storage import read_json
 from .transport import UA
+from .video_spool import VideoSpool
 
 
 class MediaService:
@@ -20,6 +21,23 @@ class MediaService:
         self.slots = asyncio.Semaphore(2)
         self.tasks = set()
         self.closed = False
+        self.spool = (
+            VideoSpool(Path(context.paths.data_dir)) if getattr(context, "paths", None) else None
+        )
+        self.housekeeper = None
+
+    async def start(self):
+        if self.spool is not None:
+            await self.spool.clean()
+            self.housekeeper = asyncio.create_task(self._housekeeping())
+
+    async def _housekeeping(self):
+        while True:
+            await asyncio.sleep(300)
+            try:
+                await self.spool.clean()
+            except OSError:
+                pass  # Retain files rather than guessing paths or resending.
 
     def enabled(self):
         cfg = self.settings
@@ -29,6 +47,10 @@ class MediaService:
 
     async def close(self):
         self.closed = True
+        if self.housekeeper is not None:
+            self.housekeeper.cancel()
+            await asyncio.gather(self.housekeeper, return_exceptions=True)
+            self.housekeeper = None
         tasks = [task for task in self.tasks if task is not asyncio.current_task()]
         for task in tasks:
             task.cancel()
@@ -99,9 +121,10 @@ class MediaService:
         self.tasks.add(task)
         started = False
         try:
-            async with asyncio.timeout(55):
+            async with asyncio.timeout(180 if asset.kind == "video" else 55):
                 async with self.slots:
                     raw = None
+                    local_video = None
                     async with httpx.AsyncClient(
                         timeout=10,
                         follow_redirects=False,
@@ -110,6 +133,13 @@ class MediaService:
                     ) as client:
                         for url in asset.urls[:3]:
                             try:
+                                if asset.kind == "video":
+                                    if self.spool is None:
+                                        raise MediaError("视频缓存未就绪")
+                                    local_video = await self.spool.download(
+                                        client, url, self.settings.media.video_max_mib * 1024 * 1024
+                                    )
+                                    break
                                 candidate = await download_image(client, url)
                                 await asyncio.to_thread(validate_original, candidate, asset.kind)
                                 if (
@@ -121,25 +151,25 @@ class MediaService:
                                 break
                             except (MediaError, httpx.HTTPError, OSError, TimeoutError):
                                 continue
-                    if raw is None:
+                    if raw is None and local_video is None:
                         raise MediaError("原媒体无法读取")
-                    encoded = base64.b64encode(raw).decode("ascii")
                     asset.state = "unknown"
                     started = True
                     if asset.kind == "image":
                         sent = await self.context.send.image(
-                            encoded,
+                            base64.b64encode(raw).decode("ascii"),
                             scope,
                             set_reply=False,
                             sync_to_maisaka_history=True,
                             maisaka_source_kind="neko_video_original",
                         )
                     else:
-                        # Canonical field only: SDK custom() duplicates the binary aliases.
+                        # Validated private file, readable by the same-host QQ
+                        # client. Tiny RPC; never make QQ fetch an external URL.
                         sent = await self.context.call_capability(
                             "send.custom",
                             message_type="video",
-                            content={"binary_data_base64": encoded},
+                            content={"file": local_video.as_uri()},
                             stream_id=scope,
                             processed_plain_text="[视频]",
                             storage_message=False,
@@ -166,7 +196,7 @@ class MediaService:
             return {
                 "success": False,
                 "status": "delivery_unconfirmed" if started else "unavailable",
-                "content": "原媒体不可用、变化或超过8MiB；未知投递不自动重发，不以预览替代。",
+                "content": "原媒体读取或发送未确认；图片上限8MiB，视频按配置及缓存/磁盘/时限保护。未知投递不自动重发，不以预览替代。",
             }
         finally:
             self.tasks.discard(task)

@@ -33,8 +33,17 @@ class Permissions(PluginConfigBase):
 
 
 class MediaSection(PluginConfigBase):
+    """视频采用本地文件引用，QQ客户端必须与插件共享同一文件系统。"""
+
+    __ui_label__ = "看图与发送媒体"
     enabled: bool = Field(default=True, description="模型按需看图及选发媒体；不自动向QQ发送")
     fallback_token: str = Field(default="", description="第三方备选Token，仅留服务器")
+    video_max_mib: int = Field(
+        default=256,
+        ge=0,
+        description="单个视频下载上限，单位MiB；0不设单文件上限。仍保留1GiB缓存、磁盘余量和超时保护，QQ也可能拒绝过大视频。",
+        json_schema_extra={"label": "视频大小上限（MiB，0为不限）"},
+    )
 
 
 class Config(PluginConfigBase):

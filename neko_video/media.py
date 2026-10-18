@@ -14,6 +14,7 @@ import json
 import re
 import socket
 import warnings
+from contextlib import aclosing
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -235,8 +236,8 @@ async def resolve_media(client, text, backup_token=""):
     )
 
 
-async def download_image(client, url, *, resolver=socket.getaddrinfo, blocked_ips=()):
-    """Pin validated DNS answers and retain original Host/SNI; recheck redirects."""
+async def download_chunks(client, url, *, resolver=socket.getaddrinfo, blocked_ips=()):
+    """Bounded chunks with pinned public DNS/Host/SNI and checked redirects."""
 
     def canonical(value):
         ip = ipaddress.ip_address(value)
@@ -277,13 +278,22 @@ async def download_image(client, url, *, resolver=socket.getaddrinfo, blocked_ip
                 continue
             if response.status_code != 200:
                 raise MediaError("图片下载失败")
-            raw = bytearray()
-            async for block in response.aiter_bytes():
-                if len(raw) + len(block) > MAX_IMAGE_BYTES:
-                    raise MediaError("图片超过8MiB限制")
-                raw.extend(block)
-            return bytes(raw)
+            async for block in response.aiter_bytes(chunk_size=256 * 1024):
+                yield block
+            return
     raise MediaError("图片重定向过多")
+
+
+async def download_image(client, url, *, resolver=socket.getaddrinfo, blocked_ips=()):
+    raw = bytearray()
+    async with aclosing(
+        download_chunks(client, url, resolver=resolver, blocked_ips=blocked_ips)
+    ) as chunks:
+        async for block in chunks:
+            if len(raw) + len(block) > MAX_IMAGE_BYTES:
+                raise MediaError("图片超过8MiB限制")
+            raw.extend(block)
+    return bytes(raw)
 
 
 def preview_image(raw):
@@ -426,7 +436,7 @@ async def preview_result(
 
 
 def validate_original(raw, kind):
-    if not raw or len(raw) > MAX_IMAGE_BYTES:
+    if not raw or (kind != "video" and len(raw) > MAX_IMAGE_BYTES):
         raise MediaError("媒体为空或超过8MiB")
     if kind == "video":
         # Container signature only, not a claim of codec compatibility or full decode.

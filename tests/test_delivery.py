@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -55,14 +56,18 @@ class Handles(unittest.TestCase):
 
 
 class Delivery(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
+    async def asyncSetUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
         config = Config()
         config.plugin.enabled = True
         context = SimpleNamespace(
+            paths=SimpleNamespace(data_dir=directory.name),
             send=SimpleNamespace(image=AsyncMock(return_value=True)),
             call_capability=AsyncMock(return_value=True),
         )
         self.service = MediaService(config, context)
+        self.addAsyncCleanup(self.service.close)
         self.raw = image_bytes()
         self.key = self.service.assets.add(
             "chat", "image", ["https://image.example/a"], hashlib.sha256(self.raw).hexdigest()
@@ -113,28 +118,40 @@ class Delivery(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.assets.items[self.key].state, "unknown")
         self.assertFalse(self.service.tasks)
 
-    async def test_video_payload_single_copy_no_remote_platform_fetch_or_history(self):
+    async def test_video_over_8mib_uses_tiny_local_file_rpc_without_remote_fetch_or_history(self):
         key = self.service.assets.add("chat", "video", ["https://video.example/video.mp4"])
-        raw = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00" + b"0" * (8 * 1024 * 1024 - 16)
-        with patch("neko_video.media_service.download_image", AsyncMock(return_value=raw)):
+        raw = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00" + b"0" * (9 * 1024 * 1024 - 16)
+
+        async def chunks(*args):
+            for i in range(0, len(raw), 256 * 1024):
+                yield raw[i : i + 256 * 1024]
+
+        with patch("neko_video.video_spool.download_chunks", chunks):
             self.assertTrue((await self.service.send(key, "chat"))["success"])
         call = self.service.context.call_capability.call_args
         self.assertEqual(call.args[0], "send.custom")
-        self.assertEqual(base64.b64decode(call.kwargs["content"]["binary_data_base64"]), raw)
+        content = call.kwargs["content"]
+        self.assertEqual(set(content), {"file"})
+        self.assertTrue(content["file"].startswith("file:///"))
+        file = next(self.service.spool.directory.glob("*.mp4"))
+        self.assertEqual(file.read_bytes(), raw)
         self.assertNotIn("data", call.kwargs)
         self.assertIs(call.kwargs["storage_message"], False)
         self.assertIs(call.kwargs["sync_to_maisaka_history"], False)
-        self.assertLess(len(json.dumps(call.kwargs).encode()), 12 * 1024 * 1024)
+        self.assertLess(len(json.dumps(call.kwargs).encode()), 4096)
 
     async def test_false_video_mapping_not_truthy_ack(self):
         key = self.service.assets.add("chat", "video", ["https://video.example/video.mp4"])
         self.service.context.call_capability.return_value = {"success": False}
-        with patch(
-            "neko_video.media_service.download_image",
-            AsyncMock(return_value=b"\0\0\0\x18ftypisom\0\0\0\0"),
-        ):
+
+        async def chunks(*args):
+            yield b"\0\0\0\x18ftypisom\0\0\0\0"
+
+        with patch("neko_video.video_spool.download_chunks", chunks):
             self.assertFalse((await self.service.send(key, "chat"))["success"])
         self.assertEqual(self.service.assets.items[key].state, "unknown")
+        self.assertEqual(len(list(self.service.spool.directory.glob("*.mp4"))), 1)
+        self.assertFalse((await self.service.send(key, "chat"))["success"])
 
     async def test_preview_registers_hash_and_motion_handles(self):
         result = rich_result(fixture())
