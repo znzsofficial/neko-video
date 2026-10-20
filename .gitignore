@@ -12,3 +12,5 @@ data/
 runtime/
 dist/
 *.log
+*.egg-info/
+uv.lock

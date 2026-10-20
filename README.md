@@ -108,6 +108,8 @@ douyin_cookie = ""
 
 当前主媒体解析接口使用**明文HTTP**，沿途可能读取或修改请求和响应；只用于公开内容。不能接受该信任模型时关闭`media.enabled`，保留官方文字资料功能。下载媒体时会校验并固定公网IP、逐跳检查重定向，拒绝内网、凭据URL及非80/443端口；这些防护不等于认证第三方返回内容。详见[SECURITY.md](SECURITY.md)。
 
+2026-10-20 匿名小请求复核：同IP的8008端口不能完成TLS握手；443端口证书过期，不能证明与现有解析服务同源或兼容。HTTP两条路由仍响应各自的必填字段校验。未绕过证书验证，未证实HTTPS的跳转/视频完整响应合同，故不擅自改协议或供应商；**明文链路风险仍未解决**。
+
 ## 开发与来源
 
 SDK接入、配置、官方解析、凭据、存储、展示和媒体投递分别位于`neko_video/`中的独立模块；`plugin.py`仅负责宿主发现。测试使用模拟网络和合成媒体，不登录账号、不发QQ、不调用模型。
@@ -115,9 +117,13 @@ SDK接入、配置、官方解析、凭据、存储、展示和媒体投递分�
 ```bash
 python -m pip install -e . ruff
 python -m unittest discover -s tests -t . -q
+python scripts/test_strict.py
 ruff check .
 ruff format --check .
 python scripts/build_release.py
+python scripts/verify_release.py dist/neko-video-1.1.0.zip
 ```
+
+CI覆盖Linux/Windows × Python 3.12/3.14 × SDK 2.12.0/最新兼容2.x，共8档；保留lint/format。严格入口拒绝零测试、任何skip、失败或导入错误。每档最终ZIP经摘要及成员白名单校验后，在临时目录、隔离Python进程中使用真实SDK发现4个工具并导入包内全部模块，检查模块来源必须是解压目录（不会误用可编辑安装的源码）。负向测试也会删除包内模块验证不能回退源码。CI的`verified-*`下载工件包含该档已验ZIP和`checksums.txt`，保留14天，不创建Release。Actions以官方仓库标签经GitHub API解析的完整commit SHA固定。
 
 本项目为独立仓库，保留派生代码的作者和来源说明，不把独立建库等同于全部原创。采用MIT许可，见[LICENSE](LICENSE)与[NOTICE](NOTICE.md)。
