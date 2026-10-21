@@ -115,6 +115,8 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             {"analyze_video": "true"},
             {"analyze_video": True, "link": "https://example.com"},
             {"media_id": "a" * 32},
+            {"include_audio": True},
+            {"analyze_video": True, "include_audio": "true"},
         ]:
             self.assertFalse((await self.plugin.read(**options))["success"])
 
@@ -126,6 +128,17 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args["task_name"], "vlm")
         self.assertEqual(args["max_tokens"], 2500)
         self.assertNotIn("model_name", args)
+
+    async def test_asr_adapter_uses_existing_host_voice_route_without_credentials(self):
+        self.assertFalse(self.plugin.config.asr.enabled)
+        self.plugin.ctx.llm = SimpleNamespace(
+            transcribe_audio=AsyncMock(return_value={"success": True, "text": "fixture"})
+        )
+        result = await self.plugin._transcribe_audio("synthetic-base64")
+        self.assertEqual(result["text"], "fixture")
+        self.plugin.ctx.llm.transcribe_audio.assert_awaited_once_with(
+            audio_base64="synthetic-base64", task_name="voice", rpc_timeout_ms=35000
+        )
 
     async def test_config_update_cancels_media_and_replaces_services(self):
         self.plugin.config.plugin.enabled = True

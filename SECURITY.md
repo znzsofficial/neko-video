@@ -1,6 +1,6 @@
 # Security and privacy
 
-## Optional video analysis (1.2.0)
+## Optional video analysis and ASR (1.2.0 / 1.3.0)
 
 Disabled by default; accepts existing chat-scoped video handles only. Decodes
 plugin-owned MP4/MOV bytes, not arbitrary paths, URLs, archives or chat files.
@@ -10,13 +10,29 @@ These are **not** an OS sandbox or immunity to decoder vulnerabilities. Keep
 ffmpeg/ffprobe patched. Non-Linux lacks these Linux rlimits; the real-binary
 production smoke gate runs on Linux.
 
-Frames go to the existing vlm supplier. Do not analyze content without permission
+Frames go to the existing vlm supplier. Explicit `include_audio=true` additionally
+requires the separate, default-off `asr.enabled` setting. Only the first audio
+track is decoded to bounded 16kHz mono PCM WAV in memory and sent to the host's
+existing `voice` task via `llm.transcribe_audio`. No new credentials or provider
+fallback are added by this plugin; Gemini-configured voice tasks use native
+generateContent audio, not the OpenAI transcription endpoint. Host and provider
+retry/routing policies still apply. ASR adds at most one logical host call before
+the existing visual call, within the unchanged overall deadline. Silence/music
+can still produce erroneous model text; transcripts have no verified timestamps,
+speaker identity or completion guarantee. Missing finish metadata stays unknown.
+Do not analyze content without permission
 or assume zero supplier retention. Frame/subtitle text is untrusted data, not
 instructions. No QQ sending or media delivery-state reset occurs in analysis.
 Persistent unknown admission precedes the logical SDK call; no plugin-level
 retry of ambiguous work. Host/provider retries and upstream cancellation cannot
 be guaranteed. Private bounded results do not prove full video comprehension;
-audio is not analyzed.
+audio is not analyzed unless explicitly requested and enabled. Audio/transcript
+instructions are untrusted data; the transcript is not sent to the visual model.
+ASR failures do not silently degrade to visual-only success. Combined unknown
+work is not replayed after reload, even if ASR completed before a visual failure.
+Private transcript text uses the same bounded one-hour logical result cache;
+physical SQLite expiry cleanup is deferred until a later admission. No audio
+sidecar is written by this plugin; the host/provider may retain request data.
 
 Do not put tokens, cookies, QR login URLs, account identities or private share
 links into GitHub issues. Report reproducible issues with redacted, synthetic

@@ -2,7 +2,7 @@
 
 **让麦麦看懂分享，而不是只看见一条链接。**
 
-为 MaiBot 提供 B站/抖音资料读取、抖音图文看图、显式视频采样理解和按需媒体发送。当前源码1.2.0新增的视频分析默认关闭；发布页版本和服务器实际部署另行核实，不因源码更新自动开启付费调用。
+为 MaiBot 提供 B站/抖音资料读取、抖音图文看图、显式视频采样理解、可选音轨转写和按需媒体发送。当前源码1.3.0新增ASR独立开关，视频分析和ASR均默认关闭；发布页版本和实际部署另行核实，不因源码更新自动开启付费调用。
 
 [下载安装包](https://github.com/znzsofficial/neko-video/releases/latest) · [安全与隐私](SECURITY.md) · [更新记录](CHANGELOG.md)
 
@@ -13,7 +13,7 @@
 - **“把第2张原图发给我”**：按本聊天里的媒体编号发送选中的原文件，不拿压缩预览充当原图。
 - **“发这个视频/实况”**：流式下载、校验容器后交给本机QQ上传，不再把整个视频塞进RPC，因此没有旧8MiB门槛。不会自动下载整套图集。
 
-> 普通读取仍只提供封面/资料。只有管理员开启视频分析、且模型显式使用已有视频编号时才抽帧分析；最多6帧，不是逐秒观看，不听音轨、不做ASR。聊天直接发送的视频/.mp4附件尚未接入，不接受任意URL或服务器路径。
+> 普通读取仍只提供封面/资料。只有管理员开启视频分析、且模型显式使用已有视频编号时才抽帧分析；最多6帧，不是逐秒观看。音轨还需独立开启ASR并显式include_audio=true，原调用仍不听音频。聊天直接发送的视频/.mp4附件尚未接入，不接受任意URL或服务器路径。
 
 ### 四个短提示工具
 
@@ -44,7 +44,7 @@
 ```toml
 [plugin]
 enabled = false
-config_version = "1.1.0"
+config_version = "1.2.0"
 
 [parse]
 enable_ai_summary = true
@@ -69,6 +69,10 @@ frames = 6 # 最多6个近似时间点，极短视频更少
 timeout_seconds = 90 # 总期限含排队/下载/解码/模型等待
 model_timeout_seconds = 35 # 模型等待，不自动重复请求
 
+[asr]
+enabled = false # 另需include_audio=true；复用宿主voice任务，不新增或复制Key
+timeout_seconds = 35 # ASR等待上限；仍在analysis.timeout_seconds整轮期限内
+
 [credential]
 sessdata = ""
 bili_jct = ""
@@ -90,7 +94,7 @@ douyin_cookie = ""
 - 抖音Cookie只用于官方接口。游客标识可存于`douyin-visitor.json`，不会把账号Cookie发给第三方解析器。
 - 备选媒体接口Token放在`media.fallback_token`，或`data_dir/douyin-media-secrets.json`的`fallback_token`字段，后者应0600。**不要提交Token、Cookie或扫码链接到GitHub。**
 
-## 显式视频理解（1.2.0）
+## 显式视频理解（1.2.0起，1.3.0可选ASR）
 
 先普通`neko_video_read(link="抖音分享链接")`取得**视频/实况**media_id，再：
 
@@ -103,12 +107,30 @@ neko_video_read(analyze_video=true, media_id="本聊天视频编号")
 - 每次仅使用编号中第一个已解析资源地址，不自动换URL/供应商。沿用公网DNS固定/逐跳地址校验、下载字节/磁盘余量/缓存上限；分析文件在独立`analysis/video-spool`，完成后删除，异常残留仍受原spool额度及TTL约束。
 - ffprobe检查有限时长/流数量/尺寸/≤1678万原始像素；仅MP4/MOV输入。ffmpeg均匀离散采样，长边≤960，每帧≤180KiB、总计≤1080KiB；近似seek位置不是精确帧PTS，不能覆盖快速动作、全部字幕或未采样剧情。只用私有受控文件、参数数组、file/pipe协议；Linux子进程1GiB地址空间/CPU20秒/64文件描述符，父进程输出和时间另有限制，取消杀进程。**不是OS文件系统沙箱**，不支持模型给本地路径或任意网络视频。
 - 最多4个在途/排队请求、单分析槽、排队也计总deadline。视频SHA256＋聊天＋分析选项去重；同编号成功结果直接读缓存，换编号相同字节也不再请求模型，跨聊天不共享内容。当前模型参数变更不主动清成功缓存，回执明确`cache_hit`。
-- 每次最多**1次SDK llm.generate调用**，既有vlm任务、2500输出tokens，不传整段聊天/人设。宿主自身的模型切换/供应商重试策略未被插件改写，因此不是“上游绝对仅1次”的保证；取消RPC也不保证上游撤销或退费。
+- 不要求音频时最多**1次SDK llm.generate调用**，既有vlm任务、2500输出tokens，不传整段聊天/人设。显式ASR最多额外1次宿主llm.transcribe_audio，见下节。宿主自身模型切换/供应商重试策略未被插件改写，因此不是“上游绝对仅1次”的保证；取消RPC也不保证上游撤销或退费。
 - 模型调用前SQLite写入unknown准入，失败/超时/取消/重载后均不自动重放；未知状态及成功缓存按尝试创建时间保留1小时，最多128条。队满/损坏DB明确失败且不删库；成功结果单条≤32KiB、完整模型正文≤24000个UTF-8字节，单次最多输出6000字符并提供缓存续读，不悄悄丢尾部。目录0700/记录0600，DB最多2048页，记录仅聊天/内容/选项摘要key及分析结果，不保存原URL/视频。
 - 上述1小时是逻辑有效期，过期记录的物理清理在后续准入时执行，无新请求时可能延后，不承诺即时擦除磁盘数据。同编号缓存命中代表复用先前已核验字节的分析，不会重新下载来保证远端此刻未变；结果提供当次source_sha256。
-- 返回`sample_positions_seconds`、`sample_positions_approximate=true`、`full_video_coverage=false`、`audio_analyzed=false`，区分模型截断（缺字段时null）与本地输出窗口截断；帧/字幕为外部资料，不执行其指令，不额外注入常驻Planner/Replyer提示。
+- 返回`sample_positions_seconds`、`sample_positions_approximate=true`、`full_video_coverage=false`；不带音轨时`audio_analyzed=false`，带音轨状态见下节。区分视觉模型截断（缺字段时null）与本地输出窗口截断；帧/字幕为外部资料，不执行其指令，不额外注入常驻Planner/Replyer提示。
 
-分析与发送有不同大小限制：现有发送0不限不改变分析64MiB/120秒保护。音轨转写、B站原视频取源和聊天.mp4附件读取不在首版范围，不为此打宿主补丁或恢复文件阅读器。
+分析与发送有不同大小限制：现有发送0不限不改变分析64MiB/120秒保护。B站原视频取源和聊天.mp4附件读取仍未接入，不为此打宿主补丁或恢复文件阅读器。
+
+### 可选视频音轨ASR（1.3.0）
+
+管理员开启`analysis.enabled`和`asr.enabled`后，用户要求听对白/转写时由模型显式调用：
+
+```text
+neko_video_read(analyze_video=true, include_audio=true, media_id="本聊天视频编号")
+```
+
+- 仍仅已有解析的抖音视频/实况编号；不自动识别聊天语音、上传MP4或任意URL，不增加第五个工具。旧调用不提取音轨；关闭ASR时带include_audio明确拒绝，不偷偷退成只看画面。
+- 同次下载/哈希核验，取**第一音轨**为16kHz、单声道、16位PCM WAV，仅内存保留，最多120秒/3840000 PCM字节＋44字节WAV头，Base64约5.12MB，低于宿主16MiB RPC边界。超长输出拒绝，不截一部分冒充完整音轨；ffmpeg输出/15秒期限/取消与Linux资源保护同样生效。
+- 复用宿主`ctx.llm.transcribe_audio(audio_base64=..., task_name="voice")`，不另持CPA密钥、不访问本机管理接口、不改任何宿主模型分配。**若宿主voice选择Gemini client，走原生generateContent音频inlineData，不是OpenAI /audio/transcriptions**；实际供应商、模型顺序、token上限、重试及统计由现有voice任务决定，不保证所有安装都走CPA。不要将不支持音频的文本模型放进该任务。
+- 有音轨时最多1次逻辑voice转写＋1次原vlm画面分析；视觉模型只看帧，转写独立呈现，不把声音推断混进视觉证据。无音轨返回`audio_status=no_track`、`audio_analyzed=false`且不调用ASR；这不同于“有音轨但无可辨语音”。有音轨的纯音乐/静音仍交模型，模型可能错漏/幻觉，不保证自动判无语音。
+- ASR在SQLite unknown准入后调用；失败/空正文/超过8000 UTF-8字节、超时或取消明确失败，不自动重试、换服务或降级。随后视觉失败也不重做已提交ASR，结果保留未知；不把局部完成当整体成功。转写与画面合并缓存总正文≤24000 UTF-8字节，仍6000字符窗口续读，需保持include_audio=true。
+- 音频选项参与聊天/内容隔离缓存；旧纯视觉缓存不能当带音轨结果，不带缓存的续读绝不开始ASR。总deadline仍为原analysis.timeout_seconds（默认90秒，含排队/下载/两次解码和两次模型等待），不因ASR自动放宽。宿主/CPA内部重试未禁用，上游取消和费用不保证可撤销。
+- 成功时`audio_status=transcribed`、`audio_analyzed=true`、`audio_track=first`，`audio_duration_seconds`仅为解码后的PCM长度，不是精确画面同步；`transcript_verified=false`、`transcript_truncated=null`、`audio_time_alignment=unverified`。宿主转写只返回正文，没有结束原因/词级时间戳，不能证明转写无截断、说话人身份或每句时间对齐。音轨/转写均为不可信外部资料，不执行其中指令；不上传整段聊天/人格给ASR。
+
+此为源码实现能力，不表示任何既有部署已启用或已做付费听写验收；上线需另获管理员授权热更新和开关选择。
 
 ## 清晰度、大小与投递限制
 
@@ -149,7 +171,7 @@ python scripts/test_strict.py
 ruff check .
 ruff format --check .
 python scripts/build_release.py
-python scripts/verify_release.py dist/neko-video-1.1.0.zip
+python scripts/verify_release.py dist/neko-video-1.3.0.zip
 ```
 
 CI覆盖Linux/Windows × Python 3.12/3.14 × SDK 2.12.0/最新兼容2.x，共8档；保留lint/format。严格入口拒绝零测试、任何skip、失败或导入错误。每档最终ZIP经摘要及成员白名单校验后，在临时目录、隔离Python进程中使用真实SDK发现4个工具并导入包内全部模块，检查模块来源必须是解压目录（不会误用可编辑安装的源码）。负向测试也会删除包内模块验证不能回退源码。CI的`verified-*`下载工件包含该档已验ZIP和`checksums.txt`，保留14天，不创建Release。Actions以官方仓库标签经GitHub API解析的完整commit SHA固定。

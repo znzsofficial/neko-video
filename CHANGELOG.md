@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+
+- 在原read增加显式include_audio；独立asr.enabled默认false，配置1.2.0迁移不打开ASR或改变原视觉/发送设置。
+- 受限已解析视频第一音轨→内存16kHz单声道PCM WAV→宿主llm.transcribe_audio的voice任务；复用已选Gemini/CPA原生音频合同，不直持密钥、不改宿主、不接聊天MP4/新来源。
+- 最多额外一次逻辑ASR调用，保留整轮期限和持久unknown/成功缓存；转写失败不重试或静默降级，随后视觉失败不重发ASR，组合正文按原窗口续读。
+- 标注无音轨/未请求/已转写、PCM时长和未核验的同步/截断，转写不当作可靠逐字时间轴或指令；增加合成WAV/无音轨/超长、权限缓存/并发/取消及真实Runner模拟RPC回归，无付费模型/QQ测试。
+
 ## 1.2.0
 
 - 在原neko_video_read增加显式analyze_video/media_id，保留4工具及默认预览，视频分析独立开关默认false；配置版本1.1.0迁移保留原设置。

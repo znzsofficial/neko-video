@@ -113,6 +113,7 @@ def metadata(body, max_seconds):
             "width": width,
             "height": height,
             "audio_analyzed": False,
+            "has_audio_track": any(s.get("codec_type") == "audio" for s in streams),
         }
     except (ValueError, TypeError, AttributeError, StopIteration, KeyError):
         raise MediaError("视频时长、尺寸或流信息无效/超过分析上限，未截断冒充完整视频") from None

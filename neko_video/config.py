@@ -5,7 +5,7 @@ from maibot_sdk import Field, PluginConfigBase
 
 class PluginSection(PluginConfigBase):
     enabled: bool = Field(default=False, description="启用Neko Video；首次安装默认关闭")
-    config_version: str = Field(default="1.1.0")
+    config_version: str = Field(default="1.2.0")
 
 
 class ParseSection(PluginConfigBase):
@@ -50,7 +50,7 @@ class MediaSection(PluginConfigBase):
 
 
 class AnalysisSection(PluginConfigBase):
-    """Explicit, separately bounded video understanding. No ASR or auto-analysis."""
+    """Explicit, separately bounded visual understanding. No auto-analysis."""
 
     enabled: bool = Field(
         default=False, description="按需分析本聊天视频媒体编号；会调用既有vlm，默认关闭"
@@ -72,6 +72,17 @@ class AnalysisSection(PluginConfigBase):
     )
 
 
+class ASRSection(PluginConfigBase):
+    """Opt-in audio transcription through the host's existing voice task."""
+
+    enabled: bool = Field(
+        default=False, description="允许显式视频音轨转写；另有一次voice调用，默认关闭"
+    )
+    timeout_seconds: int = Field(
+        default=35, ge=5, le=60, description="音轨转写等待上限，超时未知不重试；仍受分析总期限限制"
+    )
+
+
 class Config(PluginConfigBase):
     plugin: PluginSection = Field(default_factory=PluginSection)
     parse: ParseSection = Field(default_factory=ParseSection)
@@ -79,3 +90,4 @@ class Config(PluginConfigBase):
     permission: Permissions = Field(default_factory=Permissions)
     media: MediaSection = Field(default_factory=MediaSection)
     analysis: AnalysisSection = Field(default_factory=AnalysisSection)
+    asr: ASRSection = Field(default_factory=ASRSection)

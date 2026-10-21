@@ -67,7 +67,7 @@ class NekoVideoPlugin(MaiBotPlugin):
         self.media = MediaService(self.config, self.ctx)
         await self.media.start()
         self.analyzer = VideoAnalyzer(
-            self.config, self.media.assets, directory, self._visual_generate
+            self.config, self.media.assets, directory, self._visual_generate, self._transcribe_audio
         )
         self.ready = True
 
@@ -107,6 +107,13 @@ class NekoVideoPlugin(MaiBotPlugin):
     async def _visual_generate(self, prompt):
         return await self.ctx.llm.generate(
             prompt, task_name="vlm", max_tokens=2500, temperature=0.2
+        )
+
+    async def _transcribe_audio(self, audio_base64):
+        return await self.ctx.llm.transcribe_audio(
+            audio_base64=audio_base64,
+            task_name="voice",
+            rpc_timeout_ms=self.config.asr.timeout_seconds * 1000,
         )
 
     async def _summary(self, link, expected=None, timeout=40):
@@ -224,7 +231,7 @@ class NekoVideoPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="analyze_video",
                 param_type=ToolParamType.BOOLEAN,
-                description="仅用户明确要求理解视频时设true，需管理员开启analysis并填写当前聊天video media_id；最多6帧，不听音轨，不自动重试",
+                description="仅用户明确要求理解视频时设true，需管理员开启analysis并填本聊天video media_id；最多6帧，音轨需另填include_audio=true，不自动重试",
                 required=False,
             ),
             ToolParameterInfo(
@@ -240,6 +247,12 @@ class NekoVideoPlugin(MaiBotPlugin):
                 required=False,
             ),
             ToolParameterInfo(
+                name="include_audio",
+                param_type=ToolParamType.BOOLEAN,
+                description="同时转写第一音轨；仅配合analyze_video=true，需管理员开启asr，会额外调用既有voice任务；续读保持原值，无音轨不调用ASR",
+                required=False,
+            ),
+            ToolParameterInfo(
                 name="analysis_offset",
                 param_type=ToolParamType.INTEGER,
                 description="分析正文字符偏移，首次0；续读填next_analysis_offset，仅取成功缓存，不重新调用模型",
@@ -248,12 +261,23 @@ class NekoVideoPlugin(MaiBotPlugin):
         ],
     )
     async def read(
-        self, link="", image_start=0, analyze_video=False, media_id="", analysis_offset=0, **kwargs
+        self,
+        link="",
+        image_start=0,
+        analyze_video=False,
+        media_id="",
+        analysis_offset=0,
+        include_audio=False,
+        **kwargs,
     ):
         if not self.enabled():
             return {"success": False, "content": "插件未启用", "content_items": []}
-        if type(analyze_video) is not bool:
-            return {"success": False, "content": "analyze_video必须是布尔值", "content_items": []}
+        if type(analyze_video) is not bool or type(include_audio) is not bool:
+            return {
+                "success": False,
+                "content": "analyze_video/include_audio必须是布尔值",
+                "content_items": [],
+            }
         if analyze_video:
             if link or type(image_start) is not int or image_start != 0:
                 return {
@@ -261,8 +285,10 @@ class NekoVideoPlugin(MaiBotPlugin):
                     "content": "分析只填analyze_video=true与当前聊天视频media_id，不混填link或图片起点",
                     "content_items": [],
                 }
-            return await self.analyzer.read(media_id, scope_of(kwargs), analysis_offset)
-        if media_id or analysis_offset:
+            return await self.analyzer.read(
+                media_id, scope_of(kwargs), analysis_offset, include_audio
+            )
+        if media_id or analysis_offset or include_audio:
             return {
                 "success": False,
                 "content": "分析媒体编号时需显式analyze_video=true，未自动调用模型",
