@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neko-video-maibot"
-version = "1.1.0"
+version = "1.2.0"
 description = "Bounded video context and visual media tools for MaiBot"
 readme = "README.md"
 license = "MIT"

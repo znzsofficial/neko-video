@@ -5,7 +5,7 @@ from maibot_sdk import Field, PluginConfigBase
 
 class PluginSection(PluginConfigBase):
     enabled: bool = Field(default=False, description="启用Neko Video；首次安装默认关闭")
-    config_version: str = Field(default="1.0.0")
+    config_version: str = Field(default="1.1.0")
 
 
 class ParseSection(PluginConfigBase):
@@ -49,9 +49,33 @@ class MediaSection(PluginConfigBase):
     )
 
 
+class AnalysisSection(PluginConfigBase):
+    """Explicit, separately bounded video understanding. No ASR or auto-analysis."""
+
+    enabled: bool = Field(
+        default=False, description="按需分析本聊天视频媒体编号；会调用既有vlm，默认关闭"
+    )
+    max_mib: int = Field(
+        default=64, ge=1, le=64, description="分析下载上限MiB，独立于发送视频大小设置"
+    )
+    max_seconds: int = Field(
+        default=120, ge=1, le=120, description="分析视频最大时长秒数，超限不截取冒充全文"
+    )
+    frames: int = Field(
+        default=6, ge=1, le=6, description="均匀采样最多帧数，仅离散采样，不等于逐秒观看"
+    )
+    timeout_seconds: int = Field(
+        default=90, ge=10, le=120, description="整轮期限含排队、下载、抽帧及视觉调用"
+    )
+    model_timeout_seconds: int = Field(
+        default=35, ge=5, le=60, description="单次视觉调用等待上限，超时结果未知不重试"
+    )
+
+
 class Config(PluginConfigBase):
     plugin: PluginSection = Field(default_factory=PluginSection)
     parse: ParseSection = Field(default_factory=ParseSection)
     credential: Credentials = Field(default_factory=Credentials)
     permission: Permissions = Field(default_factory=Permissions)
     media: MediaSection = Field(default_factory=MediaSection)
+    analysis: AnalysisSection = Field(default_factory=AnalysisSection)

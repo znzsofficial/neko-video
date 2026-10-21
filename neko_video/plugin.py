@@ -14,6 +14,7 @@ from .media_service import MediaService
 from .official import OfficialVideoService
 from .presentation import render
 from .transport import UA
+from .video_analysis import VideoAnalyzer
 
 
 def scope_of(kwargs):
@@ -48,6 +49,7 @@ class NekoVideoPlugin(MaiBotPlugin):
         self.lifecycle = asyncio.Lock()
         self.login_start = asyncio.Lock()
         self.ready = False
+        self.analyzer = None
 
     async def on_load(self):
         async with self.lifecycle:
@@ -64,10 +66,15 @@ class NekoVideoPlugin(MaiBotPlugin):
         self.official = OfficialVideoService(self.config.parse, self.credentials, self.client)
         self.media = MediaService(self.config, self.ctx)
         await self.media.start()
+        self.analyzer = VideoAnalyzer(
+            self.config, self.media.assets, directory, self._visual_generate
+        )
         self.ready = True
 
     async def _close(self):
         self.ready = False
+        if self.analyzer is not None:
+            await self.analyzer.close()
         if self.media is not None:
             await self.media.close()
         jobs = [
@@ -96,6 +103,11 @@ class NekoVideoPlugin(MaiBotPlugin):
 
     def enabled(self):
         return self.ready and self.config.plugin.enabled
+
+    async def _visual_generate(self, prompt):
+        return await self.ctx.llm.generate(
+            prompt, task_name="vlm", max_tokens=2500, temperature=0.2
+        )
 
     async def _summary(self, link, expected=None, timeout=40):
         if not self.enabled():
@@ -200,14 +212,26 @@ class NekoVideoPlugin(MaiBotPlugin):
 
     @Tool(
         "neko_video_read",
-        description="读取抖音图文图片、视频封面和媒体编号。",
-        timeout_ms=50000,
+        description="看图与取媒体编号；显式分析本聊天视频。",
+        timeout_ms=130000,
         parameters=[
             ToolParameterInfo(
                 name="link",
                 param_type=ToolParamType.STRING,
-                description="抖音分享文本、链接或19位ID",
-                required=True,
+                description="普通预览填抖音分享文本、链接或19位ID；分析时不填，先取得video media_id",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="analyze_video",
+                param_type=ToolParamType.BOOLEAN,
+                description="仅用户明确要求理解视频时设true，需管理员开启analysis并填写当前聊天video media_id；最多6帧，不听音轨，不自动重试",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="media_id",
+                param_type=ToolParamType.STRING,
+                description="普通预览返回的视频或实况media_id，仅配合analyze_video=true；不接受URL/路径/封面编号",
+                required=False,
             ),
             ToolParameterInfo(
                 name="image_start",
@@ -215,11 +239,35 @@ class NekoVideoPlugin(MaiBotPlugin):
                 description="图片起点，从0开始，每次最多4张",
                 required=False,
             ),
+            ToolParameterInfo(
+                name="analysis_offset",
+                param_type=ToolParamType.INTEGER,
+                description="分析正文字符偏移，首次0；续读填next_analysis_offset，仅取成功缓存，不重新调用模型",
+                required=False,
+            ),
         ],
     )
-    async def read(self, link="", image_start=0, **kwargs):
+    async def read(
+        self, link="", image_start=0, analyze_video=False, media_id="", analysis_offset=0, **kwargs
+    ):
         if not self.enabled():
             return {"success": False, "content": "插件未启用", "content_items": []}
+        if type(analyze_video) is not bool:
+            return {"success": False, "content": "analyze_video必须是布尔值", "content_items": []}
+        if analyze_video:
+            if link or type(image_start) is not int or image_start != 0:
+                return {
+                    "success": False,
+                    "content": "分析只填analyze_video=true与当前聊天视频media_id，不混填link或图片起点",
+                    "content_items": [],
+                }
+            return await self.analyzer.read(media_id, scope_of(kwargs), analysis_offset)
+        if media_id or analysis_offset:
+            return {
+                "success": False,
+                "content": "分析媒体编号时需显式analyze_video=true，未自动调用模型",
+                "content_items": [],
+            }
         return await self.media.read(link, image_start, scope_of(kwargs))
 
     @Tool(

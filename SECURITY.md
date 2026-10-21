@@ -1,5 +1,23 @@
 # Security and privacy
 
+## Optional video analysis (1.2.0)
+
+Disabled by default; accepts existing chat-scoped video handles only. Decodes
+plugin-owned MP4/MOV bytes, not arbitrary paths, URLs, archives or chat files.
+Explicit argv, restricted file/pipe protocols/formats, bounded output, deadlines
+and cancellation cleanup apply. Linux also limits child address space/CPU/FDs.
+These are **not** an OS sandbox or immunity to decoder vulnerabilities. Keep
+ffmpeg/ffprobe patched. Non-Linux lacks these Linux rlimits; the real-binary
+production smoke gate runs on Linux.
+
+Frames go to the existing vlm supplier. Do not analyze content without permission
+or assume zero supplier retention. Frame/subtitle text is untrusted data, not
+instructions. No QQ sending or media delivery-state reset occurs in analysis.
+Persistent unknown admission precedes the logical SDK call; no plugin-level
+retry of ambiguous work. Host/provider retries and upstream cancellation cannot
+be guaranteed. Private bounded results do not prove full video comprehension;
+audio is not analyzed.
+
 Do not put tokens, cookies, QR login URLs, account identities or private share
 links into GitHub issues. Report reproducible issues with redacted, synthetic
 fixtures. Do not send a live credential to demonstrate a problem.

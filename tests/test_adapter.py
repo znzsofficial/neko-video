@@ -104,6 +104,29 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.plugin.inject(message=message), {"action": "continue"})
         self.assertEqual(message["raw_message"], [])
 
+    async def test_analysis_is_explicit_disabled_by_default_and_never_uses_preview(self):
+        self.plugin.config.plugin.enabled = True
+        self.assertFalse(self.plugin.config.analysis.enabled)
+        self.plugin.media.read = AsyncMock()
+        result = await self.plugin.read(analyze_video=True, media_id="a" * 32, stream_id="chat")
+        self.assertFalse(result["success"])
+        self.plugin.media.read.assert_not_awaited()
+        for options in [
+            {"analyze_video": "true"},
+            {"analyze_video": True, "link": "https://example.com"},
+            {"media_id": "a" * 32},
+        ]:
+            self.assertFalse((await self.plugin.read(**options))["success"])
+
+    async def test_vlm_adapter_routes_one_bounded_call_without_changing_model(self):
+        self.plugin.ctx.llm = SimpleNamespace(generate=AsyncMock(return_value={"content": "fake"}))
+        result = await self.plugin._visual_generate([{"role": "user", "content": "fake prompt"}])
+        self.assertEqual(result["content"], "fake")
+        args = self.plugin.ctx.llm.generate.call_args.kwargs
+        self.assertEqual(args["task_name"], "vlm")
+        self.assertEqual(args["max_tokens"], 2500)
+        self.assertNotIn("model_name", args)
+
     async def test_config_update_cancels_media_and_replaces_services(self):
         self.plugin.config.plugin.enabled = True
         old = self.plugin.media

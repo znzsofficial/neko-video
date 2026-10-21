@@ -26,6 +26,16 @@ jobs:
       - run: python -m pip check
       - run: python -m pip show maibot-plugin-sdk
       - run: python scripts/test_strict.py
+      - name: Real ffprobe and ffmpeg smoke (Linux production platform)
+        if: runner.os == 'Linux'
+        run: |
+          if ! command -v ffmpeg || ! command -v ffprobe; then
+            sudo apt-get update
+            sudo apt-get install --yes ffmpeg
+          fi
+          command -v ffmpeg
+          command -v ffprobe
+          python scripts/check_video_binary.py
       - run: ruff check .
       - run: ruff format --check .
       - run: python scripts/build_release.py

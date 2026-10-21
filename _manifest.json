@@ -2,8 +2,8 @@
   "manifest_version": 2,
   "id": "neko.video",
   "name": "Neko Video",
-  "version": "1.1.0",
-  "description": "B站与抖音文字资料、图文视觉预览及按需原媒体发送。",
+  "version": "1.2.0",
+  "description": "B站与抖音资料、图文预览、显式视频采样理解及按需原媒体发送。",
   "author": {"name": "NekoLaska", "url": "https://github.com/znzsofficial"},
   "license": "MIT",
   "urls": {"repository": "https://github.com/znzsofficial/neko-video"},
@@ -15,6 +15,6 @@
     {"type": "python_package", "name": "qrcode", "version_spec": ">=8.0"},
     {"type": "python_package", "name": "bilibili-api-python", "version_spec": ">=17.4.0"}
   ],
-  "capabilities": ["send.text", "send.image", "send.custom"],
+  "capabilities": ["send.text", "send.image", "send.custom", "llm.generate"],
   "i18n": {"default_locale": "zh-CN", "supported_locales": ["zh-CN"]}
 }

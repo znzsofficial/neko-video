@@ -38,10 +38,15 @@ class MediaAssets:
         return key
 
     def claim(self, scope, key):
-        asset = self.items.get(key)
-        if asset is None or asset.scope != scope or asset.expires <= self.clock():
-            raise ValueError("媒体编号已过期或不属于当前聊天，请重新读取")
+        asset = self.peek(scope, key)
         if asset.state != "ready":
             raise ValueError("该媒体已发送、处理中或投递未确认，不自动重发")
         asset.state = "busy"
+        return asset
+
+    def peek(self, scope, key):
+        """Analysis may inspect a handle without claiming/resetting delivery state."""
+        asset = self.items.get(key)
+        if asset is None or asset.scope != scope or asset.expires <= self.clock():
+            raise ValueError("媒体编号已过期或不属于当前聊天，请重新读取")
         return asset

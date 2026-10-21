@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+- 在原neko_video_read增加显式analyze_video/media_id，保留4工具及默认预览，视频分析独立开关默认false；配置版本1.1.0迁移保留原设置。
+- MP4有限下载/ffprobe/均匀抽帧→既有vlm，默认64MiB/120秒/6帧/一次SDK调用；无ASR、不发QQ、不消耗媒体发送状态、不接任意路径URL。
+- 持久未知尝试与成功缓存分离，聊天/哈希/选项隔离；有界队列/总deadline、取消子进程/DB损坏保留，Linux资源限制并非完整沙箱。
+- 回归增加缓存/跨聊天/并发/撤销/未知不重试/资源预算与子进程取消；Linux真实ffmpeg/ffprobe合成视频烟测、真实宿主loader/config_version/注册/生命周期隔离验收，IPC为Mock，不调用真实模型或QQ。
+
 ## 1.1.0
 
 - 视频/实况改为公网安全流式下载→私有文件→同机QQ文件引用，去掉旧8MiB门槛；原图保留8MiB、像素及哈希保护。
