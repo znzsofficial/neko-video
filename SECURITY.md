@@ -35,6 +35,22 @@ and audio options, and takes precedence over successful cached variants. Old
 opaque unknown rows cannot be mapped back to chat/content: they conservatively
 block all analysis/cache reads until their original one-hour expiry, without
 deleting evidence or extending that expiry. New rows retain chat/content isolation.
+The original four-column analysis table remains compatible with baseline SQL;
+identity mappings are committed in a separate table in the same transaction.
+The transitional five-column table is restored transactionally, preserving all
+rows and mappings; failure rolls back the whole migration. SQL compatibility
+does not restore security to old code: a safe rollback requires a compatibility
+patched build with the new admission and clock protections, not bare old code.
+Invalid/null/non-finite/negative or >5-second-future creation timestamps latch
+a persistent fault before any expiry deletion. A wall/monotonic clock divergence
+over 5 seconds in one process (including cumulative small steps), or a wall
+rollback over 5 seconds since the persisted observation, also fails closed.
+Faults stop analysis/cache reads until offline operator investigation and a
+reviewed repair; restart/clock correction alone must not clear evidence.
+Forward jumps across restart cannot reliably be distinguished from real downtime:
+the one-hour TTL still relies on trusted wall time at that boundary and is not
+an absolute billing-idempotency guarantee. Unobserved clock changes are not
+claimed detectable. Keep analysis disabled if this boundary is unacceptable.
 Private transcript text uses the same bounded one-hour logical result cache;
 physical SQLite expiry cleanup is deferred until a later admission. No audio
 sidecar is written by this plugin; the host/provider may retain request data.

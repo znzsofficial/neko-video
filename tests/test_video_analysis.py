@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
-from threading import Barrier
+from threading import Barrier, Event
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -393,6 +393,40 @@ class AnalysisTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await self.service.read(self.key, "a"))["success"])
         self.generate.assert_awaited_once()
 
+    async def test_cancel_after_sqlite_commit_before_admit_returns_preserves_unknown(self):
+        await self.service.db("get", "preflight")
+        committed, release = Event(), Event()
+        self.addCleanup(release.set)
+        real_admit = self.service.store.admit
+
+        def commit_then_wait(*args):
+            admitted = real_admit(*args)
+            committed.set()
+            if not release.wait(timeout=10):
+                raise AssertionError("test did not release committed SQLite operation")
+            return admitted
+
+        with patch.object(self.service.store, "admit", side_effect=commit_then_wait):
+            task = asyncio.create_task(self.service.read(self.key, "a"))
+            self.assertTrue(await asyncio.to_thread(committed.wait, 5))
+            # A real connection/transaction committed unknown, not a mocked DB reply.
+            key, identity = next(iter(self.service.handles.values()))
+            reopened = AnalysisStore(self.service.directory)
+            self.assertEqual(reopened.get(key, identity), {"state": "unknown"})
+            task.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(task.done())
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.cfg.analysis.model_timeout_seconds += 1
+        self.service.store = None
+        self.service.handles.clear()
+        self.assertFalse((await self.service.read(self.key, "a"))["success"])
+        self.generate.assert_not_awaited()
+        self.transcribe.assert_not_awaited()
+        self.assertFalse(any(path.exists() for path in self.created))
+
     async def test_wrong_scope_and_image_handle_denied_before_network(self):
         image = self.assets.add("a", "image", ["https://example.com/image.jpg"])
         for key, scope in [
@@ -500,7 +534,12 @@ class PersistentAdmissionTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.now = 10000
-        self.store = AnalysisStore(self.directory.name, clock=lambda: self.now)
+        self.store = self.open_store()
+
+    def open_store(self):
+        return AnalysisStore(
+            self.directory.name, clock=lambda: self.now, monotonic=lambda: self.now
+        )
 
     def test_unknown_durable_and_success_stored_separately(self):
         self.assertTrue(self.store.admit("key"))
@@ -533,7 +572,7 @@ class PersistentAdmissionTests(unittest.TestCase):
     def test_config_keys_share_atomic_unknown_identity_and_expire_without_refresh(self):
         self.assertTrue(self.store.admit("config-a", "chat-content"))
         self.now += 100
-        other = AnalysisStore(self.directory.name, clock=lambda: self.now)
+        other = self.open_store()
         self.assertFalse(other.admit("config-b", "chat-content"))
         self.assertEqual(other.get("config-b", "chat-content"), {"state": "unknown"})
         self.assertTrue(other.admit("different-chat", "chat-b-content"))
@@ -550,7 +589,7 @@ class PersistentAdmissionTests(unittest.TestCase):
 
     def test_concurrent_instances_admit_only_one_config_for_same_identity(self):
         barrier = Barrier(2)
-        other = AnalysisStore(self.directory.name, clock=lambda: self.now)
+        other = self.open_store()
 
         def reserve(store, key):
             barrier.wait(timeout=5)
@@ -572,7 +611,7 @@ class PersistentAdmissionTests(unittest.TestCase):
             con.execute(
                 "INSERT INTO analysis VALUES (?,?,?,?)", ("opaque-old", self.now, "unknown", "")
             )
-        upgraded = AnalysisStore(self.directory.name, clock=lambda: self.now)
+        upgraded = self.open_store()
         self.assertEqual(upgraded.get("opaque-old"), {"state": "unknown"})
         self.assertFalse(upgraded.admit("new-config", "new-identity"))
         self.assertEqual(upgraded.get("new-config", "new-identity"), {"state": "unknown"})
@@ -589,7 +628,7 @@ class PersistentAdmissionTests(unittest.TestCase):
                 "INSERT INTO analysis VALUES (?,?,?,?)",
                 ("old-config", self.now, "complete", json.dumps({"content": "old-result"})),
             )
-        upgraded = AnalysisStore(self.directory.name, clock=lambda: self.now)
+        upgraded = self.open_store()
         self.assertEqual(
             upgraded.get("old-config", "content-chat"),
             {"state": "complete", "result": {"content": "old-result"}},

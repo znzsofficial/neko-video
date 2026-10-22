@@ -14,6 +14,6 @@ if __name__ == "__main__":
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root))
     suite = unittest.defaultTestLoader.discover(str(root / "tests"), top_level_dir=str(root))
-    if suite.countTestCases() < 117:
-        raise SystemExit("Reviewed video safety discovery shrank below 117 tests")
+    if suite.countTestCases() < 128:
+        raise SystemExit("Reviewed video safety discovery shrank below 128 tests")
     sys.exit(0 if run(suite) else 1)
