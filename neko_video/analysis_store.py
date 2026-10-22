@@ -24,9 +24,14 @@ class AnalysisStore:
         if self.path.is_symlink():
             raise MediaError("视频分析记录不安全")
         with closing(self.connect()) as con, con:
+            con.execute("BEGIN IMMEDIATE")
             con.execute(
-                "CREATE TABLE IF NOT EXISTS analysis (id TEXT PRIMARY KEY, created REAL, state TEXT, result TEXT)"
+                "CREATE TABLE IF NOT EXISTS analysis (id TEXT PRIMARY KEY, created REAL, state TEXT, result TEXT, attempt TEXT NOT NULL DEFAULT '')"
             )
+            if "attempt" not in {row[1] for row in con.execute("PRAGMA table_info(analysis)")}:
+                # Old opaque keys cannot be mapped back to a chat/content identity.
+                # Preserve their unknown rows as a conservative, expiring global barrier.
+                con.execute("ALTER TABLE analysis ADD COLUMN attempt TEXT NOT NULL DEFAULT ''")
         self.path.chmod(0o600)
 
     def connect(self):
@@ -38,9 +43,21 @@ class AnalysisStore:
             raise
         return con
 
-    def get(self, key):
+    def unknown(self, con, attempt):
+        return (
+            con.execute(
+                "SELECT 1 FROM analysis WHERE created>? AND state IS NOT 'complete' AND (attempt=? OR attempt='') LIMIT 1",
+                (self.clock() - 3600, attempt),
+            ).fetchone()
+            is not None
+        )
+
+    def get(self, key, attempt=None):
         con = self.connect()
         try:
+            con.execute("BEGIN")
+            if self.unknown(con, attempt or key):
+                return {"state": "unknown"}
             row = con.execute(
                 "SELECT created,state,result FROM analysis WHERE id=?", (key,)
             ).fetchone()
@@ -52,18 +69,21 @@ class AnalysisStore:
         finally:
             con.close()
 
-    def admit(self, key):
+    def admit(self, key, attempt=None):
         con = self.connect()
         try:
             with con:
                 con.execute("BEGIN IMMEDIATE")
                 con.execute("DELETE FROM analysis WHERE created<=?", (self.clock() - 3600,))
+                # Atomic across analyzer instances/config variants, not just one async slot.
+                if self.unknown(con, attempt or key):
+                    return False
                 if con.execute("SELECT COUNT(*) FROM analysis").fetchone()[0] >= 128:
                     raise MediaError("视频分析尝试记录已满，未提交模型请求")
                 return (
                     con.execute(
-                        "INSERT OR IGNORE INTO analysis VALUES (?,?,?,?)",
-                        (key, self.clock(), "unknown", ""),
+                        "INSERT OR IGNORE INTO analysis (id,created,state,result,attempt) VALUES (?,?,?,?,?)",
+                        (key, self.clock(), "unknown", "", attempt or key),
                     ).rowcount
                     == 1
                 )

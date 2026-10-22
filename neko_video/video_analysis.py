@@ -176,7 +176,7 @@ class VideoAnalyzer:
                     memo = (scope, media_id, signature)
                     previous = self.handles.get(memo)
                     if previous is not None:
-                        value = await self.db("get", previous)
+                        value = await self.db("get", *previous)
                         check()
                         if value is not None:
                             return self.cached(value, offset)
@@ -201,10 +201,15 @@ class VideoAnalyzer:
                     key = hashlib.sha256(
                         ("video-analysis-v1\0" + scope + "\0" + digest + "\0" + signature).encode()
                     ).hexdigest()
+                    # Supplier uncertainty belongs to chat/content, never to mutable
+                    # deadlines, sample settings or the explicit audio/cache variant.
+                    attempt = hashlib.sha256(
+                        ("video-attempt-v1\0" + scope + "\0" + digest).encode()
+                    ).hexdigest()
                     while len(self.handles) >= 128:
                         self.handles.popitem(last=False)
-                    self.handles[memo] = key
-                    existing = await self.db("get", key)
+                    self.handles[memo] = (key, attempt)
+                    existing = await self.db("get", key, attempt)
                     check()
                     if existing is not None:
                         return self.cached(existing, offset)
@@ -247,11 +252,12 @@ class VideoAnalyzer:
                             path, self.settings.analysis.max_seconds
                         )
                         check()
-                    if not await self.db("admit", key):
-                        return self.cached(
-                            await self.db("get", key) or {"state": "unknown"}, offset
-                        )
+                    admitted = await self.db("admit", key, attempt)
                     check()
+                    if not admitted:
+                        existing = await self.db("get", key, attempt)
+                        check()
+                        return self.cached(existing or {"state": "unknown"}, offset)
                     # unknown is durable before this await. Do not replay after timeout/reload.
                     transcript = None
                     if audio is not None:

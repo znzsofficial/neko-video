@@ -1,10 +1,13 @@
 import asyncio
 import base64
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
 import sqlite3
 import tempfile
+from threading import Barrier
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -175,7 +178,7 @@ class AnalysisTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.asr.enabled = True
         self.audio_extract.side_effect = MediaError("invalid audio")
         self.assertFalse((await self.service.read(self.key, "a", include_audio=True))["success"])
-        self.assertIsNone(await self.service.db("get", next(iter(self.service.handles.values()))))
+        self.assertIsNone(await self.service.db("get", *next(iter(self.service.handles.values()))))
         self.transcribe.assert_not_awaited()
         self.generate.assert_not_awaited()
 
@@ -283,6 +286,96 @@ class AnalysisTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await self.service.read(second, "a"))["success"])
         self.generate.assert_awaited_once()
         self.assertNotIn("private supplier detail", str(result))
+
+    async def test_unknown_survives_timeout_changes_and_analyzer_reload(self):
+        self.cfg.asr.enabled = True
+        self.generate.side_effect = TimeoutError()
+        self.assertFalse((await self.service.read(self.key, "a"))["success"])
+        self.cfg.analysis.model_timeout_seconds += 1
+        self.cfg.analysis.timeout_seconds += 1
+        self.cfg.asr.timeout_seconds += 1
+        await self.service.close()
+        reloaded = VideoAnalyzer(
+            self.cfg, self.assets, self.directory.name, self.generate, self.transcribe
+        )
+        self.addAsyncCleanup(reloaded.close)
+        with patch.object(reloaded.spool, "download", self.fetcher):
+            second = self.assets.add("a", "video", ["https://example.com/other.mp4"])
+            self.assertFalse((await reloaded.read(second, "a"))["success"])
+            # Explicit ASR is not permission to replay a visual request of unknown outcome.
+            self.assertFalse((await reloaded.read(second, "a", include_audio=True))["success"])
+        self.generate.assert_awaited_once()
+        self.transcribe.assert_not_awaited()
+
+    async def test_asr_unknown_survives_config_change_without_visual_fallback(self):
+        self.cfg.asr.enabled = True
+        self.transcribe.side_effect = TimeoutError()
+        self.assertFalse((await self.service.read(self.key, "a", include_audio=True))["success"])
+        self.cfg.asr.timeout_seconds += 1
+        self.cfg.analysis.frames = 4
+        self.service.store = None
+        self.service.handles.clear()
+        for audio in [True, False]:
+            self.assertFalse(
+                (await self.service.read(self.key, "a", include_audio=audio))["success"]
+            )
+        self.transcribe.assert_awaited_once()
+        self.generate.assert_not_awaited()
+
+    async def test_unknown_precedes_old_success_cache_including_handle_fast_path(self):
+        self.cfg.asr.enabled = True
+        self.assertTrue((await self.service.read(self.key, "a"))["success"])
+        self.transcribe.side_effect = TimeoutError()
+        self.assertFalse((await self.service.read(self.key, "a", include_audio=True))["success"])
+        self.assertFalse((await self.service.read(self.key, "a"))["success"])
+        self.service.handles.clear()
+        self.service.store = None
+        self.assertFalse((await self.service.read(self.key, "a"))["success"])
+        self.generate.assert_awaited_once()
+        self.transcribe.assert_awaited_once()
+
+    async def test_unknown_does_not_block_other_chat_or_content(self):
+        self.generate.side_effect = TimeoutError()
+        self.assertFalse((await self.service.read(self.key, "a"))["success"])
+        self.generate.side_effect = None
+        other = self.assets.add("b", "video", ["https://example.com/other.mp4"])
+        self.assertTrue((await self.service.read(other, "b"))["success"])
+
+        async def different(client, url, limit):
+            path = await self.fetcher(client, url, limit)
+            path.write_bytes(b"different synthetic video")
+            return path
+
+        other = self.assets.add("a", "video", ["https://example.com/different.mp4"])
+        with patch.object(self.service.spool, "download", side_effect=different):
+            self.assertTrue((await self.service.read(other, "a"))["success"])
+        self.assertEqual(self.generate.await_count, 3)
+
+    async def test_completed_cache_is_config_specific_not_a_global_attempt_barrier(self):
+        first = await self.service.read(self.key, "a")
+        self.assertTrue(first["success"])
+        self.cfg.analysis.model_timeout_seconds += 1
+        second = await self.service.read(self.key, "a")
+        self.assertTrue(second["success"])
+        self.assertFalse(second["cache_hit"])
+        self.cfg.analysis.model_timeout_seconds -= 1
+        self.assertTrue((await self.service.read(self.key, "a"))["cache_hit"])
+        self.assertEqual(self.generate.await_count, 2)
+
+    async def test_revocation_during_denied_admission_prevents_cached_fallback(self):
+        real_db = self.service.db
+
+        async def denied(name, *args):
+            if name == "admit":
+                self.cfg.analysis.enabled = False
+                return False
+            return await real_db(name, *args)
+
+        with patch.object(self.service, "db", side_effect=denied) as db:
+            self.assertFalse((await self.service.read(self.key, "a"))["success"])
+        self.assertEqual([call.args[0] for call in db.call_args_list], ["get", "admit"])
+        self.generate.assert_not_awaited()
+        self.transcribe.assert_not_awaited()
 
     async def test_cancellation_after_admission_persists_unknown(self):
         entered = asyncio.Event()
@@ -436,6 +529,72 @@ class PersistentAdmissionTests(unittest.TestCase):
         with self.assertRaises(sqlite3.DatabaseError):
             AnalysisStore(self.directory.name)
         self.assertEqual(self.store.path.read_bytes(), b"corrupt db")
+
+    def test_config_keys_share_atomic_unknown_identity_and_expire_without_refresh(self):
+        self.assertTrue(self.store.admit("config-a", "chat-content"))
+        self.now += 100
+        other = AnalysisStore(self.directory.name, clock=lambda: self.now)
+        self.assertFalse(other.admit("config-b", "chat-content"))
+        self.assertEqual(other.get("config-b", "chat-content"), {"state": "unknown"})
+        self.assertTrue(other.admit("different-chat", "chat-b-content"))
+        self.assertTrue(other.admit("different-content", "chat-content-b"))
+        self.now += 3501
+        self.assertIsNone(other.get("config-b", "chat-content"))
+        self.assertTrue(other.admit("config-b", "chat-content"))
+
+    def test_unknown_takes_precedence_over_completed_config(self):
+        self.assertTrue(self.store.admit("a", "same"))
+        self.store.complete("a", {"content": "old"})
+        self.assertTrue(self.store.admit("b", "same"))
+        self.assertEqual(self.store.get("a", "same"), {"state": "unknown"})
+
+    def test_concurrent_instances_admit_only_one_config_for_same_identity(self):
+        barrier = Barrier(2)
+        other = AnalysisStore(self.directory.name, clock=lambda: self.now)
+
+        def reserve(store, key):
+            barrier.wait(timeout=5)
+            return store.admit(key, "same-content-chat")
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            jobs = [
+                pool.submit(reserve, self.store, "config-a"),
+                pool.submit(reserve, other, "config-b"),
+            ]
+            self.assertEqual(sorted(job.result(timeout=10) for job in jobs), [False, True])
+
+    def test_old_schema_unknown_is_preserved_as_expiring_barrier(self):
+        with closing(sqlite3.connect(self.store.path)) as con, con:
+            con.execute("DROP TABLE analysis")
+            con.execute(
+                "CREATE TABLE analysis (id TEXT PRIMARY KEY, created REAL, state TEXT, result TEXT)"
+            )
+            con.execute(
+                "INSERT INTO analysis VALUES (?,?,?,?)", ("opaque-old", self.now, "unknown", "")
+            )
+        upgraded = AnalysisStore(self.directory.name, clock=lambda: self.now)
+        self.assertEqual(upgraded.get("opaque-old"), {"state": "unknown"})
+        self.assertFalse(upgraded.admit("new-config", "new-identity"))
+        self.assertEqual(upgraded.get("new-config", "new-identity"), {"state": "unknown"})
+        self.now += 3601
+        self.assertTrue(upgraded.admit("new-config", "new-identity"))
+
+    def test_old_schema_complete_cache_survives_upgrade(self):
+        with closing(sqlite3.connect(self.store.path)) as con, con:
+            con.execute("DROP TABLE analysis")
+            con.execute(
+                "CREATE TABLE analysis (id TEXT PRIMARY KEY, created REAL, state TEXT, result TEXT)"
+            )
+            con.execute(
+                "INSERT INTO analysis VALUES (?,?,?,?)",
+                ("old-config", self.now, "complete", json.dumps({"content": "old-result"})),
+            )
+        upgraded = AnalysisStore(self.directory.name, clock=lambda: self.now)
+        self.assertEqual(
+            upgraded.get("old-config", "content-chat"),
+            {"state": "complete", "result": {"content": "old-result"}},
+        )
+        self.assertTrue(upgraded.admit("new-config", "different-content-chat"))
 
 
 class FrameBoundaryTests(unittest.IsolatedAsyncioTestCase):

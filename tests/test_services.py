@@ -1,4 +1,5 @@
 import json
+import asyncio
 import os
 from pathlib import Path
 import tempfile
@@ -15,6 +16,20 @@ from neko_video.parsers import basic_douyin, chapter_douyin, generation_douyin, 
 from neko_video.presentation import render
 from neko_video.storage import read_json, write_json, StorageError, cookie_dict
 from neko_video.transport import request_bytes, ProviderError
+
+
+class UnreadBody(httpx.AsyncByteStream):
+    def __init__(self):
+        self.closed = False
+        self.reads = 0
+
+    async def __aiter__(self):
+        self.reads += 1
+        raise AssertionError("share response body must not be consumed")
+        yield b""  # pragma: no cover
+
+    async def aclose(self):
+        self.closed = True
 
 
 class PureServices(unittest.TestCase):
@@ -125,6 +140,91 @@ class AsyncServices(unittest.IsolatedAsyncioTestCase):
         self.settings = SimpleNamespace(
             sessdata="", bili_jct="", buvid3="", dedeuserid="", douyin_cookie=""
         )
+
+    async def test_share_redirects_close_huge_bodies_without_consuming_them(self):
+        for source, target, expected in [
+            (
+                "https://b23.tv/fixture",
+                "https://www.bilibili.com/video/BV1234567890",
+                ("bvid", "BV1234567890"),
+            ),
+            (
+                "https://v.douyin.com/fixture",
+                "https://www.douyin.com/video/7123456789012345678",
+                ("douyin", "7123456789012345678"),
+            ),
+        ]:
+            bodies = []
+
+            def handler(request):
+                body = UnreadBody()
+                bodies.append(body)
+                return httpx.Response(
+                    302, headers={"location": target, "content-length": str(10**12)}, stream=body
+                )
+
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                service = OfficialVideoService(SimpleNamespace(), None, client)
+                self.assertEqual(await service.resolve(source), expected)
+            self.assertTrue(bodies)
+            self.assertTrue(all(body.closed and body.reads == 0 for body in bodies))
+
+    async def test_share_redirect_host_boundary_and_hop_budget_remain(self):
+        for source in ["https://b23.tv/fixture", "https://v.douyin.com/fixture"]:
+            for target, count in [
+                ("http://127.0.0.1/private", 1),
+                ("https://evil.example/video/7123456789012345678", 1),
+                ("https://user:pass@www.douyin.com/video/7123456789012345678", 1),
+                (source, 4),
+            ]:
+                bodies = []
+
+                def handler(request):
+                    self.assertEqual(str(request.url), source)
+                    self.assertEqual(request.headers.get("cookie"), "")
+                    body = UnreadBody()
+                    bodies.append(body)
+                    return httpx.Response(302, headers={"location": target}, stream=body)
+
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    service = OfficialVideoService(SimpleNamespace(), None, client)
+                    self.assertIsNone(await service.resolve(source))
+                self.assertEqual(len(bodies), count)
+                self.assertTrue(all(body.closed and body.reads == 0 for body in bodies))
+
+    async def test_share_non_redirect_huge_body_is_closed_and_direct_ids_need_no_get(self):
+        for source in ["https://b23.tv/fixture", "https://v.douyin.com/fixture"]:
+            body = UnreadBody()
+            async with httpx.AsyncClient(
+                transport=httpx.MockTransport(lambda r: httpx.Response(200, stream=body))
+            ) as client:
+                service = OfficialVideoService(SimpleNamespace(), None, client)
+                self.assertIsNone(await service.resolve(source))
+            self.assertTrue(body.closed)
+            self.assertEqual(body.reads, 0)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(AsyncMock(side_effect=AssertionError("no GET")))
+        ) as client:
+            service = OfficialVideoService(SimpleNamespace(), None, client)
+            self.assertEqual(
+                await service.resolve("https://www.douyin.com/video/7123456789012345678"),
+                ("douyin", "7123456789012345678"),
+            )
+            self.assertEqual(
+                await service.resolve("https://www.bilibili.com/video/BV1234567890"),
+                ("bvid", "BV1234567890"),
+            )
+
+    async def test_share_header_wait_obeys_cancellation_deadline(self):
+        async def handler(request):
+            await asyncio.Event().wait()
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            service = OfficialVideoService(SimpleNamespace(), None, client)
+            for source in ["https://b23.tv/fixture", "https://v.douyin.com/fixture"]:
+                with self.assertRaises(TimeoutError):
+                    async with asyncio.timeout(0.01):
+                        await service.resolve(source)
 
     async def test_official_boundary_redirect_and_size(self):
         async with httpx.AsyncClient(

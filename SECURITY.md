@@ -30,6 +30,11 @@ audio is not analyzed unless explicitly requested and enabled. Audio/transcript
 instructions are untrusted data; the transcript is not sent to the visual model.
 ASR failures do not silently degrade to visual-only success. Combined unknown
 work is not replayed after reload, even if ASR completed before a visual failure.
+Since 1.3.1, unknown work is keyed by chat/content independently of configuration
+and audio options, and takes precedence over successful cached variants. Old
+opaque unknown rows cannot be mapped back to chat/content: they conservatively
+block all analysis/cache reads until their original one-hour expiry, without
+deleting evidence or extending that expiry. New rows retain chat/content isolation.
 Private transcript text uses the same bounded one-hour logical result cache;
 physical SQLite expiry cleanup is deferred until a later admission. No audio
 sidecar is written by this plugin; the host/provider may retain request data.

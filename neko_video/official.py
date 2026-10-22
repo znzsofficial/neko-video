@@ -50,10 +50,8 @@ class OfficialVideoService:
                 and expected != "douyin"
             ):
                 for _ in range(4):
-                    response = await self.client.get(
-                        url, follow_redirects=False, headers={"Cookie": ""}
-                    )
-                    match = re.search(r"/video/(BV[0-9A-Za-z]{10}|av\d+)", str(response.url), re.I)
+                    # Parse only after the host/URL boundary above. Direct IDs need no GET.
+                    match = re.search(r"/video/(BV[0-9A-Za-z]{10}|av\d+)", url, re.I)
                     if match:
                         value = match[1]
                         return (
@@ -61,9 +59,14 @@ class OfficialVideoService:
                             if value.upper().startswith("BV")
                             else ("aid", int(value[2:]))
                         )
-                    if response.status_code not in {301, 302, 303, 307, 308}:
+                    async with self.client.stream(
+                        "GET", url, follow_redirects=False, headers={"Cookie": ""}
+                    ) as response:
+                        status = response.status_code
+                        location = response.headers.get("location", "")
+                    if status not in {301, 302, 303, 307, 308}:
                         break
-                    url = urljoin(url, response.headers.get("location", ""))
+                    url = urljoin(url, location)
                     p = urlsplit(url)
                     if (
                         p.scheme not in {"http", "https"}
@@ -79,14 +82,15 @@ class OfficialVideoService:
                 if vid:
                     return "douyin", vid
                 for _ in range(4):
-                    response = await self.client.get(
-                        url, follow_redirects=False, headers={"Cookie": ""}
-                    )
-                    candidate = (
-                        urljoin(url, response.headers.get("location", ""))
-                        if response.status_code in {301, 302, 303, 307, 308}
-                        else str(response.url)
-                    )
+                    async with self.client.stream(
+                        "GET", url, follow_redirects=False, headers={"Cookie": ""}
+                    ) as response:
+                        status = response.status_code
+                        candidate = (
+                            urljoin(url, response.headers.get("location", ""))
+                            if status in {301, 302, 303, 307, 308}
+                            else str(response.url)
+                        )
                     vid, url = share_target(candidate)
                     if vid:
                         return "douyin", vid
@@ -94,7 +98,7 @@ class OfficialVideoService:
                     match = re.search(r"(?:^|&)modal_id=(\d{19})(?:&|$)", p.query)
                     if match:
                         return "douyin", match[1]
-                    if response.status_code not in {301, 302, 303, 307, 308}:
+                    if status not in {301, 302, 303, 307, 308}:
                         break
             except MediaError:
                 pass
