@@ -28,14 +28,16 @@ jobs:
       - run: python scripts/test_strict.py
       - name: Real ffprobe and ffmpeg smoke (Linux production platform)
         if: runner.os == 'Linux'
+        timeout-minutes: 5
         run: |
           if ! command -v ffmpeg || ! command -v ffprobe; then
-            sudo apt-get update
-            sudo apt-get install --yes ffmpeg
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+            timeout 90s sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update
+            timeout 150s sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 install --yes --no-install-recommends ffmpeg
           fi
           command -v ffmpeg
           command -v ffprobe
-          python scripts/check_video_binary.py
+          timeout 45s python scripts/check_video_binary.py
       - run: ruff check .
       - run: ruff format --check .
       - run: python scripts/build_release.py
