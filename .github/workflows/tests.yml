@@ -32,6 +32,9 @@ jobs:
         run: |
           if ! command -v ffmpeg || ! command -v ffprobe; then
             sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+            if [ -f /etc/apt/apt-mirrors.txt ]; then
+              sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+            fi
             timeout 90s sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update
             timeout 150s sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 install --yes --no-install-recommends ffmpeg
           fi
