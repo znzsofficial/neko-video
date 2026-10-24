@@ -178,6 +178,6 @@ python scripts/build_release.py
 python scripts/verify_release.py dist/neko-video-1.3.1.zip
 ```
 
-CI覆盖Linux/Windows × Python 3.12/3.14 × SDK 2.12.0/最新兼容2.x，共8档；保留lint/format。严格入口拒绝零测试、任何skip、失败或导入错误。每档最终ZIP经摘要及成员白名单校验后，在临时目录、隔离Python进程中使用真实SDK发现4个工具并导入包内全部模块，检查模块来源必须是解压目录（不会误用可编辑安装的源码）。负向测试也会删除包内模块验证不能回退源码。CI的`verified-*`下载工件包含该档已验ZIP和`checksums.txt`，保留14天，不创建Release。Actions以官方仓库标签经GitHub API解析的完整commit SHA固定。
+日常源码CI用Linux生产Python3.14.4/SDK2.16.0与Windows最低Python3.12/SDK2.12两组；原8组完整兼容保留在v标签、手动full及有源码变化的夜间验证，另保留固定生产组合。保留完整自有测试、关键媒体/回执/持久防重/打包测试组实际发现、真实ffmpeg/ffprobe烟测和lint/format，不用固定测试总数证明正确；零发现、任何skip、失败或导入错误仍失败。每档最终ZIP仍核摘要/白名单、隔离SDK发现4工具并导入全部包内模块，检查来源必须是解压目录，负向缺模块测试仍拒绝回退源码。`verified-*`包含已验ZIP/checksums并保留14天，不自动Release或部署，Actions原固定SHA不变。纯根目录/docs下Markdown只查文档，不获得源码发布资格；源码上传须同main提交及核心测试/包验证/ci-gate/publish-gate成功，受控手动同HEAD核心验证可用于文档HEAD发版，不做空提交或调用真实模型/QQ。
 
 本项目为独立仓库，保留派生代码的作者和来源说明，不把独立建库等同于全部原创。采用MIT许可，见[LICENSE](LICENSE)与[NOTICE](NOTICE.md)。
