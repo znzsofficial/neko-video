@@ -188,7 +188,7 @@ class NekoVideoPlugin(MaiBotPlugin):
 
     @Tool(
         "neko_video_bilibili",
-        description="按需读B站资料、平台总结或字幕摘录。",
+        description="读取B站摘要或字幕文字，不分析画面。",
         timeout_ms=45000,
         parameters=[
             ToolParameterInfo(
@@ -205,7 +205,7 @@ class NekoVideoPlugin(MaiBotPlugin):
 
     @Tool(
         "neko_video_douyin",
-        description="读取抖音官方总结；看图用neko_video_read。",
+        description="读取抖音文字资料；看图用neko_video_read。",
         timeout_ms=45000,
         parameters=[
             ToolParameterInfo(
@@ -222,7 +222,7 @@ class NekoVideoPlugin(MaiBotPlugin):
 
     @Tool(
         "neko_video_read",
-        description="看图与取媒体编号；显式分析本聊天视频。",
+        description="预览抖音图文并取编号；按编号显式分析视频。",
         timeout_ms=130000,
         parameters=[
             ToolParameterInfo(
@@ -252,7 +252,7 @@ class NekoVideoPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="include_audio",
                 param_type=ToolParamType.BOOLEAN,
-                description="分析时同时转写音轨；无音轨自动跳过，不会重试",
+                description="仅明确要求听音/转写且ASR已启用时设true；分析时取第一音轨，无音轨跳过，不重试",
                 required=False,
             ),
             ToolParameterInfo(
@@ -341,7 +341,7 @@ class NekoVideoPlugin(MaiBotPlugin):
 
     @Tool(
         "neko_video_chat",
-        description="读取本聊天消息里直接发送的视频，返回media_id供分析或发送。",
+        description="按真实消息ID登记本聊天视频，返回media_id供分析或发送。",
         timeout_ms=65000,
         parameters=[
             ToolParameterInfo(

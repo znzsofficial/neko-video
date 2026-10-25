@@ -48,6 +48,27 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         descriptions = [x["metadata"].get("description", "") for x in tools]
         self.assertTrue(all(len(x) <= 45 for x in descriptions))
         self.assertLessEqual(sum(map(len, descriptions)), 190)
+        by_name = {x["name"]: x["metadata"] for x in tools}
+        self.assertIn("不分析画面", by_name["neko_video_bilibili"]["description"])
+        self.assertIn("抖音", by_name["neko_video_read"]["description"])
+        self.assertIn("按编号显式", by_name["neko_video_read"]["description"])
+        self.assertIn("真实消息ID", by_name["neko_video_chat"]["description"])
+        # Parameter metadata is also model-visible; a short tool label cannot replace it.
+        read_params = by_name["neko_video_read"]["parameters"]
+        if isinstance(read_params, dict):
+            props = read_params["properties"]
+        else:
+            props = {p["name"]: p for p in read_params}
+        chat_params = by_name["neko_video_chat"]["parameters"]
+        chat_props = (
+            chat_params["properties"]
+            if isinstance(chat_params, dict)
+            else {p["name"]: p for p in chat_params}
+        )
+        self.assertIn("当前聊天", chat_props["source_message_id"]["description"])
+        self.assertIn("不接受URL/路径", props["media_id"]["description"])
+        self.assertIn("不自动重试", props["analyze_video"]["description"])
+        self.assertIn("ASR已启用", props["include_audio"]["description"])
         sender = next(x for x in tools if x["name"] == "neko_video_send")
         self.assertEqual(sender["metadata"]["platforms"], ["qq"])
         manifest = json.loads(
