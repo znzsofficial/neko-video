@@ -188,7 +188,7 @@ class NekoVideoPlugin(MaiBotPlugin):
 
     @Tool(
         "neko_video_bilibili",
-        description="按需读取B站视频信息与官方总结。",
+        description="按需读B站资料、平台总结或字幕摘录。",
         timeout_ms=45000,
         parameters=[
             ToolParameterInfo(

@@ -236,7 +236,9 @@ async def resolve_media(client, text, backup_token=""):
     )
 
 
-async def download_chunks(client, url, *, resolver=socket.getaddrinfo, blocked_ips=()):
+async def download_chunks(
+    client, url, *, resolver=socket.getaddrinfo, blocked_ips=(), allow_redirects=True
+):
     """Bounded chunks with pinned public DNS/Host/SNI and checked redirects."""
 
     def canonical(value):
@@ -274,6 +276,8 @@ async def download_chunks(client, url, *, resolver=socket.getaddrinfo, blocked_i
             extensions={"sni_hostname": original.host.encode()},
         ) as response:
             if response.status_code in {301, 302, 303, 307, 308}:
+                if not allow_redirects:
+                    raise MediaError("资源不允许重定向")
                 url = urljoin(str(original), response.headers.get("location", ""))
                 continue
             if response.status_code != 200:

@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import base64
 from contextlib import ExitStack
+import importlib
 import json
 import os
 from pathlib import Path
@@ -51,6 +52,59 @@ async def verify_gemini_audio():
     parts = arguments["contents"][0].parts
     assert parts[1].inline_data.mime_type == "audio/wav"
     assert parts[1].inline_data.data == b"synthetic-wav-part"
+
+
+async def verify_bilibili_subtitle_tool(runner, meta):
+    """Real Runner/SDK/tool/service path; only Bili I/O boundaries are synthetic."""
+    from bilibili_api.exceptions import ResponseCodeException
+    from src.plugin_runtime.protocol.envelope import Envelope
+
+    official = importlib.import_module(
+        type(meta.instance).__module__.rsplit(".", 1)[0] + ".official"
+    )
+    resource = SimpleNamespace(
+        get_info=AsyncMock(
+            return_value={
+                "bvid": "BV1234567890",
+                "cid": 123,
+                "title": "合成资料",
+                "videos": 1,
+                "owner": {"name": "synthetic"},
+                "duration": 60,
+            }
+        ),
+        get_ai_conclusion=AsyncMock(side_effect=ResponseCodeException(-504, "synthetic-private")),
+        get_subtitle=AsyncMock(
+            return_value={
+                "subtitles": [
+                    {"lan": "zh-CN", "subtitle_url": "https://aisubtitle.hdslb.com/synthetic"}
+                ]
+            }
+        ),
+    )
+    text = "这是一段足够长的合成字幕正文，用于隔离宿主工具链验证，不调用真实平台或模型，也不会发送QQ消息。"
+    with (
+        patch.object(official, "Video", return_value=resource),
+        patch.object(official, "fetch_subtitle", AsyncMock(return_value=text)),
+        patch.object(meta.instance.credentials, "bilibili", AsyncMock(return_value=object())),
+    ):
+        response = await runner._handle_invoke(
+            Envelope(
+                request_id=2,
+                message_type="request",
+                method="plugin.invoke_tool",
+                plugin_id="neko.video",
+                payload={"component_name": "neko_video_bilibili", "args": {"link": "BV1234567890"}},
+            )
+        )
+    assert response.error is None, response.error
+    result = response.payload["result"]
+    assert result["success"] and text in result["content"], result
+    assert "服务调用超时（code=-504）" in result["content"]
+    assert "字幕摘录" in result["content"] and "未读取画面或音频" in result["content"]
+    assert "[平台AI总结]" not in result["content"] and "synthetic-private" not in result["content"]
+    resource.get_ai_conclusion.assert_awaited_once()
+    resource.get_subtitle.assert_awaited_once()
 
 
 async def verify(host_source, report):
@@ -234,6 +288,7 @@ async def verify(host_source, report):
                 == ""
             )
             await verify_gemini_audio()
+            await verify_bilibili_subtitle_tool(runner, meta)
             report.write_text(
                 json.dumps(
                     {
@@ -245,6 +300,7 @@ async def verify(host_source, report):
                         "synthetic_transcription_rpc_roundtrip": True,
                         "chat_video_real_runner_sdk_rpc_roundtrip": True,
                         "host_gemini_native_audio_part_contract_with_mocked_generate": True,
+                        "bilibili_subtitle_fallback_real_runner_tool_synthetic_source": True,
                         "analysis_enabled_migration_preserved_asr_off": True,
                         "existing_unlimited_send_setting_preserved": True,
                         "missing_config_version_negative_test": True,

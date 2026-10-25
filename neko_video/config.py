@@ -10,7 +10,7 @@ class PluginSection(PluginConfigBase):
 
 class ParseSection(PluginConfigBase):
     enable_ai_summary: bool = Field(
-        default=True, description="读取平台AI总结（不保证所有视频可用）"
+        default=True, description="读取平台AI总结；B站临时不可用时回退字幕，不保证所有视频可用"
     )
     enable_in_group: bool = Field(default=True, description="群聊分享自动附加文字资料")
     enable_in_private: bool = Field(default=True, description="私聊分享自动附加文字资料")

@@ -60,6 +60,16 @@ links into GitHub issues. Report reproducible issues with redacted, synthetic
 fixtures. Do not send a live credential to demonstrate a problem.
 
 Official Bilibili/Douyin summaries may use credentials provided by the operator.
+Since 1.4.6, the existing Bilibili text option also permits bounded subtitle
+fallback for a single-part video when the AI summary is absent or temporarily
+unavailable. Login, permission, risk-control and rate-limit failures do not trigger
+another content endpoint. No account is borrowed from other plugins. Subtitle
+URLs must use allowlisted official HTTPS domains and pinned public DNS; a separate
+anonymous client sends no account cookies, follows no redirects, and reads at most
+2MiB within 3 seconds. Text is an explicitly labeled sample, not an AI summary,
+visual/audio analysis or executable instruction. Metadata-only results use at
+most 30 seconds of backoff, not a claim that no summary exists; no background
+retry or model/ASR call is added.
 Third-party media parsers receive a public share link or video ID, never those
 account cookies. The default primary parser uses plain HTTP: observers on that
 path may read or alter that request/response. Use only public share links and

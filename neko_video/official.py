@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlsplit
 
 from bilibili_api.video import Video
 
+from .bilibili_text import fetch_subtitle, read_failure
 from .cache import TTLCache
 from .media import share_target, MediaError
 from .parsers import basic_douyin, chapter_douyin, generation_douyin, stream_douyin
@@ -120,7 +121,14 @@ class OfficialVideoService:
                 self._douyin(str(vid)) if kind == "douyin" else self._bilibili(kind, vid)
             )
             if result:
-                self.cache.put(key, result, self.settings.cache_ttl_seconds)
+                ttl = self.settings.cache_ttl_seconds
+                if result.get("platform") == "bilibili" and not (
+                    result.get("summary") or result.get("subtitle_excerpt")
+                ):
+                    # Metadata-only is not proof that the video has no summary.
+                    # Brief backoff avoids request storms without hiding recovery for 30min.
+                    ttl = min(ttl, 30)
+                self.cache.put(key, result, ttl)
             return result
 
     async def _bilibili(self, kind, vid):
@@ -134,19 +142,83 @@ class OfficialVideoService:
             "description": str(info.get("desc") or "")[:200],
             "url": "https://www.bilibili.com/video/" + str(info.get("bvid") or vid),
             "summary": "",
+            "subtitle_excerpt": "",
+            "content_source": "metadata_only",
+            "summary_status": "disabled",
+            "read_notices": [],
         }
-        if self.settings.enable_ai_summary:
-            credential = await self.credentials.bilibili()
-            if credential is not None:
-                try:
-                    authenticated = Video(bvid=info.get("bvid"), credential=credential)
-                    data = await authenticated.get_ai_conclusion(cid=info.get("cid"))
-                    data = data.get("data") if isinstance(data.get("data"), dict) else data
-                    result["summary"] = str((data.get("model_result") or {}).get("summary") or "")[
-                        :6000
-                    ]
-                except Exception:
-                    pass  # Keep real metadata, never invent a summary.
+        if not self.settings.enable_ai_summary:
+            return result
+        try:
+            credential = await asyncio.wait_for(self.credentials.bilibili(), timeout=2)
+        except Exception as error:
+            result["summary_status"], notice = read_failure(error, "B站登录状态读取")
+            result["read_notices"].append(notice)
+            return result
+        if credential is None:
+            result["summary_status"] = "not_logged_in"
+            return result
+        authenticated = Video(bvid=info.get("bvid"), credential=credential)
+        try:
+            data = await asyncio.wait_for(
+                authenticated.get_ai_conclusion(cid=info.get("cid")), timeout=2.5
+            )
+            if not isinstance(data, dict):
+                raise ValueError("invalid summary payload")
+            data = data.get("data") if isinstance(data.get("data"), dict) else data
+            model_result = data.get("model_result") or {}
+            if not isinstance(model_result, dict):
+                raise ValueError("invalid summary payload")
+            text = model_result.get("summary")
+            if isinstance(text, str) and len(text.strip()) >= 30:
+                result.update(
+                    summary=text.strip()[:6000],
+                    summary_status="available",
+                    content_source="platform_ai",
+                    coverage="仅平台AI摘要，可能存在概括误差；未读取画面或音频",
+                )
+                if int(info.get("videos", 1)) > 1:
+                    result["coverage"] += "；多P视频只取得当前分P资料，不代表全部分P"
+                return result
+            result["summary_status"] = "not_provided"
+        except Exception as error:
+            state, notice = read_failure(error, "B站AI摘要读取")
+            result["summary_status"] = state
+            result["read_notices"].append(notice)
+            # Do not use another endpoint to bypass login/risk/rate-limit rejection.
+            if state != "temporary":
+                return result
+        if int(info.get("videos", 1)) > 1:
+            result["read_notices"].append("多P视频暂不回退字幕，避免把首P当作整条视频")
+            return result
+        try:
+            data = await asyncio.wait_for(
+                authenticated.get_subtitle(cid=info.get("cid")), timeout=2
+            )
+            entries = data.get("subtitles") if isinstance(data, dict) else None
+            if not isinstance(entries, list):
+                raise ValueError("invalid subtitle list")
+            entries = [
+                row
+                for row in entries[:64]
+                if isinstance(row, dict) and isinstance(row.get("subtitle_url"), str)
+            ]
+            entries.sort(key=lambda row: not str(row.get("lan", "")).startswith(("zh", "ai-zh")))
+            if not entries:
+                result["read_notices"].append("平台未提供可用字幕，当前只有视频基本资料")
+                return result
+            excerpt = await fetch_subtitle(entries[0]["subtitle_url"])
+            if not excerpt:
+                result["read_notices"].append("字幕有效正文不足，当前只有视频基本资料")
+                return result
+            result.update(
+                subtitle_excerpt=excerpt,
+                content_source="subtitle",
+                coverage="字幕文本抽样，含近似时间范围；不是AI总结，未读取画面或音频",
+            )
+        except Exception as error:
+            _, notice = read_failure(error, "B站字幕读取")
+            result["read_notices"].append(notice)
         return result
 
     async def _douyin(self, vid):
