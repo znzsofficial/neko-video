@@ -318,9 +318,15 @@ class NekoVideoPlugin(MaiBotPlugin):
         except Exception as exc:
             raise RuntimeError(f"消息读取能力被拒绝：{type(exc).__name__}") from exc
         if isinstance(result, dict) and result.get("success") is False:
-            # Not a permission denial: the lookup itself failed or found nothing.
+            raise RuntimeError("宿主消息查询返回错误，不能据此判断消息不存在")
+        if result is None:
             return None
-        if isinstance(result, list):
+        # PluginContext unwraps the Host's {success, message} RPC envelope.
+        # Successful calls normally return the message dict itself, not an
+        # object containing another 'message' field.
+        if isinstance(result, dict) and "message_id" in result:
+            messages = [result]
+        elif isinstance(result, list):
             messages = result
         elif isinstance(result, dict):
             messages = result.get("messages") or result.get("message") or []
@@ -341,7 +347,7 @@ class NekoVideoPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="source_message_id",
                 param_type=ToolParamType.STRING,
-                description="含视频的消息ID或上下文短编号",
+                description="当前聊天中视频的真实消息ID，不是上下文短编号",
                 required=True,
             ),
         ],
@@ -362,9 +368,12 @@ class NekoVideoPlugin(MaiBotPlugin):
         except RuntimeError as exc:
             return {"success": False, "content": f"{exc}；未取得消息内容，不重试"}
         if message is None:
-            return {"success": False, "content": "找不到该消息；请让用户重新发送视频"}
+            return {
+                "success": False,
+                "content": "当前聊天未查到这条消息，请核对视频消息ID和目标聊天；不要反复重发视频。",
+            }
         try:
-            record = await self.chat_media.register(message, scope, source_message_id)
+            record = await self.chat_media.register(message, scope, message["message_id"])
         except ChatMediaError as exc:
             return {"success": False, "content": str(exc)}
         return {

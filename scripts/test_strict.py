@@ -30,6 +30,7 @@ if __name__ == "__main__":
         "tests.test_video_audio",
         "tests.test_release",
         "tests.test_adapter",
+        "tests.test_chat_media",
     }
     if not required <= groups:
         raise SystemExit(

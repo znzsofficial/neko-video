@@ -7,6 +7,7 @@ never point the instance at live data. No connect/handshake, model or QQ call.
 import argparse
 import asyncio
 import base64
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -54,17 +55,28 @@ async def verify_gemini_audio():
 
 async def verify(host_source, report):
     root = Path(__file__).resolve().parents[1]
-    with tempfile.TemporaryDirectory(prefix="neko-video-real-host-") as directory:
-        instance = Path(directory)
+    with ExitStack() as cleanup:
+        directory = cleanup.enter_context(
+            tempfile.TemporaryDirectory(prefix="neko-video-real-host-")
+        )
+        instance = Path(directory).resolve()
+        cleanup.callback(os.chdir, Path.cwd())
+        os.chdir(instance)
         os.environ["MAIBOT_INSTANCE_DIR"] = str(instance)
         os.environ["MAIBOT_LOCALE"] = "zh-CN"
-        os.environ["MAIBOT_HOST_VERSION"] = "1.3.12"
+        os.environ["MAIBOT_HOST_VERSION"] = "1.3.15"
         sys.path.insert(0, str(host_source))
         from src.plugin_runtime.runner.runner_main import PluginRunner, PluginActivationStatus
         from src.plugin_runtime.runner import runner_main
         from src.plugin_runtime import ENV_HOST_VERSION
+        from src.plugin_runtime.protocol.envelope import Envelope
+        from src.common.database.database import engine
+        from src.common.logger import close_handlers
 
-        os.environ[ENV_HOST_VERSION] = "1.3.12"
+        cleanup.callback(engine.dispose)
+        cleanup.callback(close_handlers)
+
+        os.environ[ENV_HOST_VERSION] = "1.3.15"
         assert runner_main._PROJECT_ROOT == instance, "Refuse live host instance paths"
         plugins = instance / "plugins"
         target = plugins / "neko-video"
@@ -87,10 +99,53 @@ async def verify(host_source, report):
         )
         registrations = []
         transcriptions = []
+        chat_calls = []
+        chat_message = {
+            "message_id": "123456",
+            "session_id": "synthetic-group",
+            "platform": "qq",
+            "account_id": "789",
+            "processed_plain_text": "[视频] 文件: test.mp4，大小: 12",
+            "message_info": {"group_info": {"group_id": "123"}, "user_info": {"user_id": "456"}},
+        }
 
         async def request(method, **kwargs):
             if method == "cap.call":
                 payload = kwargs["payload"]
+                if payload["capability"] == "message.get_by_id":
+                    assert payload["args"]["chat_id"] == "synthetic-group"
+                    assert payload["args"]["message_id"] == "123456"
+                    chat_calls.append("message.get_by_id")
+                    # Host response is still wrapped at this RPC boundary. The
+                    # real Runner/SDK must unwrap it before the tool sees it.
+                    return SimpleNamespace(
+                        error=None, payload={"result": {"success": True, "message": chat_message}}
+                    )
+                if payload["capability"] == "api.call":
+                    args = payload["args"]
+                    assert args["api_name"] == "adapter.napcat.action.call_data"
+                    assert args["args"] == {
+                        "action_name": "get_msg",
+                        "params": {"message_id": "123456"},
+                    }
+                    chat_calls.append("get_msg")
+                    return SimpleNamespace(
+                        error=None,
+                        payload={
+                            "result": {
+                                "success": True,
+                                "result": {
+                                    "message_id": "123456",
+                                    "message": [
+                                        {
+                                            "type": "video",
+                                            "data": {"url": "https://synthetic.invalid/video.mp4"},
+                                        }
+                                    ],
+                                },
+                            }
+                        },
+                    )
                 assert payload["capability"] == "llm.transcribe_audio"
                 args = payload["args"]
                 assert args["audio_base64"] == "c3ludGhldGlj" and args["task_name"] == "voice"
@@ -132,9 +187,10 @@ async def verify(host_source, report):
             tools = [
                 item for item in registration["components"] if item["component_type"] == "TOOL"
             ]
-            assert len(tools) == 4
+            assert len(tools) == 5
             assert "llm.generate" in registration["capabilities_required"]
             assert "llm.transcribe_audio" in registration["capabilities_required"]
+            assert {"message.get_by_id", "api.call"} <= set(registration["capabilities_required"])
             assert callable(meta.instance.ctx.llm.transcribe_audio)
             answer = await meta.instance._transcribe_audio("c3ludGhldGlj")
             assert answer == {"success": True, "text": "synthetic transcript"}
@@ -158,6 +214,25 @@ async def verify(host_source, report):
             assert previous.normalized_config["analysis"]["enabled"] is True
             assert previous.normalized_config["asr"]["enabled"] is False
             assert previous.normalized_config["media"]["video_max_mib"] == 0
+            invocation = Envelope(
+                request_id=1,
+                message_type="request",
+                method="plugin.invoke_tool",
+                plugin_id="neko.video",
+                payload={
+                    "component_name": "neko_video_chat",
+                    "args": {"source_message_id": "123456", "session_id": "synthetic-group"},
+                },
+            )
+            response = await runner._handle_invoke(invocation)
+            assert response.error is None, response.error
+            registered = response.payload["result"]
+            assert registered["success"], registered
+            assert chat_calls == ["message.get_by_id", "get_msg"]
+            assert (
+                meta.instance.media.assets.peek("synthetic-group", registered["media_id"]).digest
+                == ""
+            )
             await verify_gemini_audio()
             report.write_text(
                 json.dumps(
@@ -168,6 +243,7 @@ async def verify(host_source, report):
                         "asr_default_enabled": False,
                         "transcription_capability_registered": True,
                         "synthetic_transcription_rpc_roundtrip": True,
+                        "chat_video_real_runner_sdk_rpc_roundtrip": True,
                         "host_gemini_native_audio_part_contract_with_mocked_generate": True,
                         "analysis_enabled_migration_preserved_asr_off": True,
                         "existing_unlimited_send_setting_preserved": True,

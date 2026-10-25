@@ -4,6 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from maibot_sdk.context import PluginContext
+
 from neko_video.assets import MediaAssets
 from neko_video.chat_media import ChatMediaError, ChatMediaService, chat_video_name
 from neko_video.config import Config
@@ -175,12 +177,34 @@ class ChatToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_message_still_reports_not_found(self):
         self.enable()
-        self.plugin.ctx.call_capability = AsyncMock(
-            return_value={"success": False, "error": "not found"}
-        )
+        self.plugin.ctx.call_capability = AsyncMock(return_value=None)
         result = await self.plugin.chat_video(source_message_id="999", stream_id="stream-a")
         self.assertFalse(result["success"])
-        self.assertIn("找不到该消息", result["content"])
+        self.assertIn("未查到这条消息", result["content"])
+
+    async def test_host_query_error_is_not_reported_as_missing_message(self):
+        self.enable()
+
+        async def rpc(method, plugin_id, payload):
+            return {"success": False, "error": "synthetic query failure"}
+
+        self.plugin.ctx = PluginContext("neko.video", rpc_call=rpc)
+        result = await self.plugin.chat_video(source_message_id="42", session_id="stream-a")
+        self.assertFalse(result["success"])
+        self.assertIn("宿主消息查询返回错误", result["content"])
+        self.assertNotIn("未查到", result["content"])
+
+    async def test_real_sdk_null_message_and_foreign_session_never_reach_adapter(self):
+        self.enable()
+        for raw_message in [None, {**message(), "session_id": "another-chat"}]:
+
+            async def rpc(method, plugin_id, payload, value=raw_message):
+                return {"success": True, "message": value}
+
+            self.plugin.ctx = PluginContext("neko.video", rpc_call=rpc)
+            result = await self.plugin.chat_video(source_message_id="42", session_id="stream-a")
+            self.assertFalse(result["success"])
+        self.plugin.chat_media.context.api.call.assert_not_awaited()
 
     async def test_full_path_via_real_message_shape(self):
 
@@ -197,3 +221,47 @@ class ChatToolTests(unittest.IsolatedAsyncioTestCase):
         args = self.plugin.ctx.call_capability.await_args.kwargs
         self.assertEqual(args["chat_id"], "stream-a")
         self.assertEqual(args["message_id"], "1251563450")
+
+    async def test_real_sdk_normalizes_host_envelope_before_plugin_reads_it(self):
+        self.enable()
+
+        async def rpc(method, plugin_id, payload):
+            self.assertEqual((method, plugin_id), ("cap.call", "neko.video"))
+            self.assertEqual(payload["capability"], "message.get_by_id")
+            self.assertEqual(payload["args"]["chat_id"], "stream-a")
+            return {"success": True, "message": message()}
+
+        self.plugin.ctx = PluginContext("neko.video", rpc_call=rpc)
+        # Real SDK, not a mock returning the host's still-wrapped result.
+        normalized = await self.plugin.ctx.message.get_by_id("1251563450", chat_id="stream-a")
+        self.assertEqual(normalized, message())
+        self.assertEqual(await self.plugin._chat_message("stream-a", "1251563450"), message())
+
+    async def test_real_sdk_message_lookup_and_adapter_api_roundtrip(self):
+        self.enable()
+        calls = []
+
+        async def rpc(method, plugin_id, payload):
+            self.assertEqual((method, plugin_id), ("cap.call", "neko.video"))
+            calls.append(payload)
+            if payload["capability"] == "message.get_by_id":
+                return {"success": True, "message": message()}
+            self.assertEqual(payload["capability"], "api.call")
+            args = payload["args"]
+            self.assertEqual(args["api_name"], "adapter.napcat.action.call_data")
+            self.assertEqual(
+                args["args"], {"action_name": "get_msg", "params": {"message_id": "1251563450"}}
+            )
+            return {
+                "success": True,
+                "result": get_msg_response(url="https://cdn.example.com/v.mp4"),
+            }
+
+        self.plugin.ctx = PluginContext("neko.video", rpc_call=rpc)
+        self.plugin.chat_media.context = self.plugin.ctx
+        result = await self.plugin.chat_video(source_message_id="1251563450", session_id="stream-a")
+        self.assertTrue(result["success"], result)
+        self.assertEqual([c["capability"] for c in calls], ["message.get_by_id", "api.call"])
+        asset = self.plugin.media.assets.peek("stream-a", result["media_id"])
+        self.assertEqual(asset.urls, ("https://cdn.example.com/v.mp4",))
+        self.assertEqual(asset.digest, "")
