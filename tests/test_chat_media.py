@@ -148,6 +148,31 @@ class ChatToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("消息读取能力被拒绝", result["content"])
         self.assertNotIn("找不到该消息", result["content"])
 
+    async def test_focus_turn_explicit_session_wins_over_injected_stream(self):
+        self.enable()
+        self.plugin.ctx.call_capability = AsyncMock(
+            return_value={"success": True, "message": message()}
+        )
+        self.plugin.ctx.api.call.return_value = get_msg_response(
+            url="https://cdn.example.com/v.mp4"
+        )
+        # Focus turn: model passes the target session; host injected another stream.
+        result = await self.plugin.chat_video(
+            source_message_id="1251563450",
+            stream_id="triggering-private-chat",
+            session_id="stream-a",
+        )
+        self.assertTrue(result["success"])
+        args = self.plugin.ctx.call_capability.await_args.kwargs
+        self.assertEqual(args["chat_id"], "stream-a")
+
+    async def test_normal_turn_uses_injected_stream_when_no_explicit_session(self):
+        self.enable()
+        self.plugin.ctx.call_capability = AsyncMock(return_value={"success": False})
+        result = await self.plugin.chat_video(source_message_id="42", stream_id="stream-b")
+        self.assertFalse(result["success"])
+        self.assertEqual(self.plugin.ctx.call_capability.await_args.kwargs["chat_id"], "stream-b")
+
     async def test_missing_message_still_reports_not_found(self):
         self.enable()
         self.plugin.ctx.call_capability = AsyncMock(

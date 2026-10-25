@@ -349,8 +349,13 @@ class NekoVideoPlugin(MaiBotPlugin):
     async def chat_video(self, source_message_id="", **kwargs):
         if not self.enabled() or not self.config.media.enabled:
             return {"success": False, "content": "插件或媒体功能未启用"}
-        scope = scope_of(kwargs)
-        if not scope or not isinstance(source_message_id, str):
+        if not isinstance(source_message_id, str):
+            return {"success": False, "content": "缺少消息编号"}
+        # In shared-Focus turns the model passes the target session explicitly;
+        # host-injected stream_id is the triggering chat and would mismatch.
+        explicit = str(kwargs.get("session_id") or "").strip()
+        scope = explicit or scope_of(kwargs)
+        if not scope:
             return {"success": False, "content": "缺少当前聊天或消息编号"}
         try:
             message = await self._chat_message(scope, source_message_id)
