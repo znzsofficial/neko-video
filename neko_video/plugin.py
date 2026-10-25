@@ -300,10 +300,14 @@ class NekoVideoPlugin(MaiBotPlugin):
         return await self.media.read(link, image_start, scope_of(kwargs))
 
     async def _chat_message(self, stream_id, message_id):
-        """Read back one message dict of this chat; empty dict if unavailable."""
+        """Read back one message dict of this chat; None if not found.
+
+        Capability denial (missing manifest declaration) is surfaced as an
+        error string so it cannot masquerade as a missing message.
+        """
         message_id = str(message_id or "").strip()
         if not message_id or len(message_id) > 128:
-            return {}
+            return None
         try:
             result = await self.ctx.call_capability(
                 "message.get_by_id",
@@ -311,8 +315,11 @@ class NekoVideoPlugin(MaiBotPlugin):
                 message_id=message_id,
                 include_binary_data=False,
             )
-        except Exception:
-            return {}
+        except Exception as exc:
+            raise RuntimeError(f"消息读取能力被拒绝：{type(exc).__name__}") from exc
+        if isinstance(result, dict) and result.get("success") is False:
+            # Not a permission denial: the lookup itself failed or found nothing.
+            return None
         if isinstance(result, list):
             messages = result
         elif isinstance(result, dict):
@@ -324,7 +331,7 @@ class NekoVideoPlugin(MaiBotPlugin):
         for message in messages if isinstance(messages, list) else []:
             if isinstance(message, dict) and str(message.get("session_id") or "") == stream_id:
                 return message
-        return {}
+        return None
 
     @Tool(
         "neko_video_chat",
@@ -345,8 +352,11 @@ class NekoVideoPlugin(MaiBotPlugin):
         scope = scope_of(kwargs)
         if not scope or not isinstance(source_message_id, str):
             return {"success": False, "content": "缺少当前聊天或消息编号"}
-        message = await self._chat_message(scope, source_message_id)
-        if not message:
+        try:
+            message = await self._chat_message(scope, source_message_id)
+        except RuntimeError as exc:
+            return {"success": False, "content": f"{exc}；未取得消息内容，不重试"}
+        if message is None:
             return {"success": False, "content": "找不到该消息；请让用户重新发送视频"}
         try:
             record = await self.chat_media.register(message, scope, source_message_id)

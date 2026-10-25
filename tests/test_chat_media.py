@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 
 from neko_video.assets import MediaAssets
 from neko_video.chat_media import ChatMediaError, ChatMediaService, chat_video_name
+from neko_video.config import Config
+from neko_video.plugin import NekoVideoPlugin
 
 
 def message(text="[视频] 文件: 4b95.mp4，大小: 1403651", group="123", mid="1251563450"):
@@ -106,3 +108,67 @@ class RegisterTests(unittest.IsolatedAsyncioTestCase):
         record = await self.service.register(message(), "stream-a")
         with self.assertRaises(ValueError):
             self.assets.peek("stream-b", record["media_id"])
+
+
+class ChatToolTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        import tempfile
+
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+
+        class Plugin(NekoVideoPlugin):
+            config = Config()
+            ctx = SimpleNamespace(
+                paths=SimpleNamespace(data_dir=self.directory.name),
+                logger=SimpleNamespace(info=lambda *a: None),
+                send=SimpleNamespace(image=AsyncMock(return_value=True)),
+                api=SimpleNamespace(call=AsyncMock()),
+            )
+
+        self.plugin = Plugin()
+        await self.plugin.on_load()
+        self.addAsyncCleanup(self.plugin.on_unload)
+
+    def enable(self):
+        self.plugin.config.plugin.enabled = True
+        self.plugin.config.parse.enable_douyin = True
+        self.plugin.config.media.enabled = True
+
+    async def test_capability_denial_is_not_reported_as_missing_message(self):
+
+        self.enable()
+
+        def denied(*args, **kwargs):
+            raise PermissionError("capability not declared")
+
+        self.plugin.ctx.call_capability = denied
+        result = await self.plugin.chat_video(source_message_id="1251563450", stream_id="stream-a")
+        self.assertFalse(result["success"])
+        self.assertIn("消息读取能力被拒绝", result["content"])
+        self.assertNotIn("找不到该消息", result["content"])
+
+    async def test_missing_message_still_reports_not_found(self):
+        self.enable()
+        self.plugin.ctx.call_capability = AsyncMock(
+            return_value={"success": False, "error": "not found"}
+        )
+        result = await self.plugin.chat_video(source_message_id="999", stream_id="stream-a")
+        self.assertFalse(result["success"])
+        self.assertIn("找不到该消息", result["content"])
+
+    async def test_full_path_via_real_message_shape(self):
+
+        self.enable()
+        self.plugin.ctx.call_capability = AsyncMock(
+            return_value={"success": True, "message": message()}
+        )
+        self.plugin.ctx.api.call.return_value = get_msg_response(
+            url="https://cdn.example.com/v.mp4"
+        )
+        result = await self.plugin.chat_video(source_message_id="1251563450", stream_id="stream-a")
+        self.assertTrue(result["success"])
+        self.assertIn("media_id", result)
+        args = self.plugin.ctx.call_capability.await_args.kwargs
+        self.assertEqual(args["chat_id"], "stream-a")
+        self.assertEqual(args["message_id"], "1251563450")
