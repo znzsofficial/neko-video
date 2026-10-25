@@ -231,13 +231,13 @@ class NekoVideoPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="analyze_video",
                 param_type=ToolParamType.BOOLEAN,
-                description="仅用户明确要求理解视频时设true，需管理员开启analysis并填本聊天video media_id；最多6帧，音轨需另填include_audio=true，不自动重试",
+                description="仅用户明确要求理解视频时设true，并配合本聊天video的media_id；最多6帧，不自动重试",
                 required=False,
             ),
             ToolParameterInfo(
                 name="media_id",
                 param_type=ToolParamType.STRING,
-                description="普通预览返回的视频或实况media_id，仅配合analyze_video=true；不接受URL/路径/封面编号",
+                description="本聊天视频/实况的media_id，仅配合analyze_video=true；不接受URL/路径/封面编号",
                 required=False,
             ),
             ToolParameterInfo(
@@ -249,13 +249,13 @@ class NekoVideoPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="include_audio",
                 param_type=ToolParamType.BOOLEAN,
-                description="同时转写第一音轨；仅配合analyze_video=true，需管理员开启asr，会额外调用既有voice任务；续读保持原值，无音轨不调用ASR",
+                description="分析时同时转写音轨；无音轨自动跳过，不会重试",
                 required=False,
             ),
             ToolParameterInfo(
                 name="analysis_offset",
                 param_type=ToolParamType.INTEGER,
-                description="分析正文字符偏移，首次0；续读填next_analysis_offset，仅取成功缓存，不重新调用模型",
+                description="分析正文续读偏移，首次0，续读填上次返回的next_analysis_offset；不重新调用模型",
                 required=False,
             ),
         ],
