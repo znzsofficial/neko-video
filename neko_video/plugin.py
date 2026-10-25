@@ -337,15 +337,9 @@ class NekoVideoPlugin(MaiBotPlugin):
                 description="含视频的消息ID或上下文短编号",
                 required=True,
             ),
-            ToolParameterInfo(
-                name="video_index",
-                param_type=ToolParamType.INTEGER,
-                description="同一消息里第几个视频，从0开始；只有一个时填0",
-                required=False,
-            ),
         ],
     )
-    async def chat_video(self, source_message_id="", video_index=0, **kwargs):
+    async def chat_video(self, source_message_id="", **kwargs):
         if not self.enabled() or not self.config.media.enabled:
             return {"success": False, "content": "插件或媒体功能未启用"}
         scope = scope_of(kwargs)
@@ -355,7 +349,7 @@ class NekoVideoPlugin(MaiBotPlugin):
         if not message:
             return {"success": False, "content": "找不到该消息；请让用户重新发送视频"}
         try:
-            record = await self.chat_media.register(message, scope, video_index)
+            record = await self.chat_media.register(message, scope, source_message_id)
         except ChatMediaError as exc:
             return {"success": False, "content": str(exc)}
         return {

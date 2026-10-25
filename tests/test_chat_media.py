@@ -1,47 +1,44 @@
-"""Chat-native video attachment registration; adapter API mocked, no network."""
+"""Chat-native video registration via get_msg; adapter API mocked, no network."""
 
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from neko_video.assets import MediaAssets
-from neko_video.chat_media import ChatMediaError, ChatMediaService, video_records
+from neko_video.chat_media import ChatMediaError, ChatMediaService, chat_video_name
 
 
-def message_with(video=None, group="178687944", account="3392089897"):
-    extra = {}
-    if video is not None:
-        extra["qq_video_attachments"] = video
+def message(text="[视频] 文件: 4b95.mp4，大小: 1403651", group="123", mid="1251563450"):
     return {
         "session_id": "stream-a",
-        "account_id": account,
+        "message_id": mid,
+        "account_id": "789",
+        "processed_plain_text": text,
         "message_info": {
             "group_info": {"group_id": group} if group else None,
             "user_info": {"user_id": "10001"},
-            "additional_config": extra,
         },
     }
 
 
-class RecordExtraction(unittest.TestCase):
-    def test_records_bounded_and_normalized(self):
-        videos = [
-            {"file_id": "", "url": "https://example.com/v.mp4", "file": "a.mp4", "file_size": 12},
-            {"file_id": "ABC123", "file_size": "bad"},
-            "junk",
-            {"file_id": "D{0}".format("x" * 300), "file_name": "deep/dir/b.mp4", "file_size": 5},
-        ]
-        records = video_records(message_with(videos))
-        self.assertEqual(len(records), 3)
-        self.assertEqual(records[0]["url"], "https://example.com/v.mp4")
-        self.assertEqual(records[1]["size"], 0)
-        self.assertEqual(len(records[2]["file_id"]), 256)
-        self.assertEqual(records[2]["name"], "b.mp4")
+def get_msg_response(url="", file_id="VID1", name="4b95.mp4"):
+    data = {"file": name, "file_id": file_id, "file_size": 1403651}
+    if url:
+        data["url"] = url
+    return {"message_id": "1251563450", "message": [{"type": "video", "data": data}]}
 
-    def test_records_reject_non_video_and_missing_ident(self):
-        self.assertEqual(video_records(message_with([{"name": "x.pdf"}])), [])
-        self.assertEqual(video_records(message_with([{"url": "ftp://nope"}])), [])
-        self.assertEqual(video_records(message_with("not-a-list")), [])
+
+class NameExtraction(unittest.TestCase):
+    def test_extracts_video_name_from_flattened_marker(self):
+        self.assertEqual(chat_video_name(message()), "4b95.mp4")
+        self.assertEqual(
+            chat_video_name(message(text="看这个\n[视频] 文件: clip.9495.mp4，大小: 9 \n后面")),
+            "clip.9495.mp4",
+        )
+
+    def test_rejects_plain_text_and_non_video_names(self):
+        self.assertEqual(chat_video_name(message(text="没有视频的普通消息")), "")
+        self.assertEqual(chat_video_name(message(text="[视频] 文件: notes.pdf，大小: 1")), "")
 
 
 class RegisterTests(unittest.IsolatedAsyncioTestCase):
@@ -50,56 +47,59 @@ class RegisterTests(unittest.IsolatedAsyncioTestCase):
         self.ctx = SimpleNamespace(api=SimpleNamespace(call=AsyncMock()))
         self.service = ChatMediaService(self.ctx, object(), self.assets)
 
-    async def test_direct_url_registers_without_adapter_call(self):
-        record = await self.service.register(
-            message_with(
-                [{"url": "https://cdn.example.com/v.mp4", "file": "clip.mp4", "file_size": 100}]
-            ),
-            "stream-a",
-        )
-        self.ctx.api.call.assert_not_awaited()
+    async def test_segment_url_registers_directly(self):
+        self.ctx.api.call.return_value = get_msg_response(url="https://cdn.example.com/v.mp4")
+        record = await self.service.register(message(), "stream-a")
+        self.assertEqual(self.ctx.api.call.await_count, 1)
         asset = self.assets.peek("stream-a", record["media_id"])
         self.assertEqual(asset.kind, "video")
         self.assertEqual(asset.urls, ("https://cdn.example.com/v.mp4",))
+        self.assertEqual(record["name"], "4b95.mp4")
 
-    async def test_file_id_resolves_via_get_file_then_fallback(self):
+    async def test_file_id_falls_back_to_get_group_file_url(self):
         self.ctx.api.call.side_effect = [
-            {"status": "failed"},
-            {"status": "ok", "data": {"url": "https://ftn.qq.com/dl?v=1"}},
+            get_msg_response(),
+            {"file": "https://ftn.qq.com/dl?v=1"},
         ]
-        record = await self.service.register(
-            message_with([{"file_id": "VID1", "file": "native.mp4", "file_size": 2048}]),
-            "stream-a",
-        )
-        self.assertEqual(self.ctx.api.call.await_count, 2)
+        record = await self.service.register(message(), "stream-a")
+        actions = [c.kwargs["action_name"] for c in self.ctx.api.call.await_args_list]
+        self.assertEqual(actions, ["get_msg", "get_file"])
         self.assertEqual(
             self.assets.peek("stream-a", record["media_id"]).urls[0],
             "https://ftn.qq.com/dl?v=1",
         )
+
+    async def test_private_message_without_group_raises_without_fallback(self):
+        self.ctx.api.call.side_effect = [
+            get_msg_response(),
+            {"file": "/local/path.mp4"},
+        ]
+        with self.assertRaises(ChatMediaError):
+            await self.service.register(message(group=""), "stream-a")
         actions = [c.kwargs["action_name"] for c in self.ctx.api.call.await_args_list]
-        self.assertEqual(actions, ["get_file", "get_group_file_url"])
+        self.assertEqual(actions, ["get_msg", "get_file"])
 
-    async def test_invalid_index_and_bad_responses_rejected(self):
+    async def test_no_video_segment_or_bad_payload_rejected(self):
+        self.ctx.api.call.return_value = {"message": [{"type": "text", "data": "hi"}]}
         with self.assertRaises(ChatMediaError):
-            await self.service.register(message_with([{"url": "https://x/v.mp4"}]), "stream-a", 5)
-        self.ctx.api.call.return_value = {"status": "ok", "data": {"file": "/local/path.mp4"}}
+            await self.service.register(message(), "stream-a")
+        self.ctx.api.call.return_value = {"message": "flat"}
         with self.assertRaises(ChatMediaError):
-            await self.service.register(
-                message_with([{"file_id": "VID2", "file_size": 1}]), "stream-a"
-            )
-        self.assets.items.clear()
-        self.assertEqual(len(self.assets.items), 0)
+            await self.service.register(message(), "stream-a")
 
-    async def test_suspicious_file_id_rejected_before_any_call(self):
+    async def test_suspicious_file_id_rejected_before_get_file(self):
+        self.ctx.api.call.return_value = get_msg_response(file_id="../escape?x")
         with self.assertRaises(ChatMediaError):
-            await self.service.register(
-                message_with([{"file_id": "../escape?x", "file_size": 1}]), "stream-a"
-            )
+            await self.service.register(message(), "stream-a")
+
+    async def test_message_without_video_marker_rejected_without_api_call(self):
+        self.ctx.api.call.return_value = get_msg_response()
+        with self.assertRaises(ChatMediaError):
+            await self.service.register(message(text="plain"), "stream-a")
         self.ctx.api.call.assert_not_awaited()
 
     async def test_cross_scope_media_id_rejected(self):
-        record = await self.service.register(
-            message_with([{"url": "https://cdn.example.com/v.mp4", "file_size": 1}]), "stream-a"
-        )
+        self.ctx.api.call.return_value = get_msg_response(url="https://cdn.example.com/v.mp4")
+        record = await self.service.register(message(), "stream-a")
         with self.assertRaises(ValueError):
             self.assets.peek("stream-b", record["media_id"])

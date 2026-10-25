@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1
+
+- 修复1.4.0的取源假设错误：本机适配器把 video 段压平为纯文本后，`additional_config` 并不保留 `qq_video_attachments` 结构（该结构仅存在于其他环境的宿主/适配器组合），原实现因此永远找不到附件。现改为读取消息的 `[视频] 文件:…` 文本标记确认消息确实带视频，再经公开 `get_msg` 动作取回原始 OneBot 消息段，从 video 段解析 file_id/直链，必要时 `get_file`/`get_group_file_url` 兜底；群聊私聊一致。
+- 工具签名简化为仅 `source_message_id`（一条QQ消息单视频段）；无视频标记直接拒绝且不调用任何接口。失败保持安全：不下载、不调模型、不重试。
+- 回归改为覆盖文本标记提取、get_msg 段解析、直链/兜底次序、私聊无群号不兜底、可疑file_id白名单、跨聊天编号拒绝；无真实网络/模型/QQ调用。
+
 ## 1.4.0
 
 - 新增 `neko_video_chat`：按消息ID读取本聊天直接发送的 QQ 原生视频/视频文件附件，经适配器公开 `get_file`/`get_group_file_url` 动作取得下载地址后登记为本聊天视频编号；不自动分析、不自动发送，后续理解/发送仍走既有 `neko_video_read(analyze_video)` 与 `neko_video_send` 管线。
