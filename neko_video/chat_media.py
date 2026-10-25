@@ -6,7 +6,6 @@ through ``get_file``. Only bounded metadata is kept; no cookies are reused.
 """
 
 import asyncio
-import hashlib
 import re
 
 VIDEO_TEXT = re.compile(r"\[视频\][^\n]{0,300}")
@@ -103,6 +102,7 @@ class ChatMediaService:
         async with self.slots:
             data = await self._video_segment(message_id)
             url = await self.resolve_url(data, group_id)
-        digest = hashlib.sha256((str(data.get("file_id") or url)).encode()).hexdigest()
-        media_id = self.assets.add(scope, "video", (url,), digest)
+        # Video analysis hashes downloaded content itself; registering a
+        # non-content digest would make that check always fail.
+        media_id = self.assets.add(scope, "video", (url,), "")
         return {"media_id": media_id, "name": name}

@@ -54,6 +54,9 @@ class RegisterTests(unittest.IsolatedAsyncioTestCase):
         asset = self.assets.peek("stream-a", record["media_id"])
         self.assertEqual(asset.kind, "video")
         self.assertEqual(asset.urls, ("https://cdn.example.com/v.mp4",))
+        # Content digest stays empty: analysis hashes downloaded bytes itself and
+        # a non-content digest would make that verification always fail.
+        self.assertEqual(asset.digest, "")
         self.assertEqual(record["name"], "4b95.mp4")
 
     async def test_file_id_falls_back_to_get_group_file_url(self):
