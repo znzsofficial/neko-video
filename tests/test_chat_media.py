@@ -1,5 +1,4 @@
 """Chat-native video attachment registration; adapter API mocked, no network."""
-import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
