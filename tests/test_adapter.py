@@ -43,11 +43,11 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_components_and_description_budget(self):
         components = collect_components(self.plugin)
         tools = [x for x in components if x["type"] == "TOOL"]
-        self.assertEqual(len(tools), 4)
+        self.assertEqual(len(tools), 5)
         self.assertTrue(all(x["name"].startswith("neko_video_") for x in tools))
         descriptions = [x["metadata"].get("description", "") for x in tools]
         self.assertTrue(all(len(x) <= 45 for x in descriptions))
-        self.assertLessEqual(sum(map(len, descriptions)), 150)
+        self.assertLessEqual(sum(map(len, descriptions)), 190)
         sender = next(x for x in tools if x["name"] == "neko_video_send")
         self.assertEqual(sender["metadata"]["platforms"], ["qq"])
         manifest = json.loads(
@@ -73,7 +73,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             spec.loader.exec_module(module)
             discovered = module.create_plugin()
             self.assertEqual(
-                len([item for item in collect_components(discovered) if item["type"] == "TOOL"]), 4
+                len([item for item in collect_components(discovered) if item["type"] == "TOOL"]), 5
             )
         finally:
             for name in list(sys.modules):

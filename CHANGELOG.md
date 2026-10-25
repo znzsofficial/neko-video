@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.0
+
+- 新增 `neko_video_chat`：按消息ID读取本聊天直接发送的 QQ 原生视频/视频文件附件，经适配器公开 `get_file`/`get_group_file_url` 动作取得下载地址后登记为本聊天视频编号；不自动分析、不自动发送，后续理解/发送仍走既有 `neko_video_read(analyze_video)` 与 `neko_video_send` 管线。
+- 附件元数据只取 `additional_config.qq_video_attachments` 的有界字段；file_id 截断256并做字符白名单校验，直接URL仅接受 http(s)；同一消息多视频用 `video_index` 明确选择，不随机挑。工具总数升为5，描述预算每项≤45字/总≤190字仍由测试约束。
+- 聊天视频与既有分析共享全部预算与防重：64MiB/120秒/6帧/总期限、ASR独立开关、按真实字节hash＋音频选项去重、unknown不重放；登记失败明确拒绝，不退回猜测。增加离线回归（记录提取、越权scope、可疑file_id、fallback次序），无真实网络/模型/QQ调用。
+
 ## 1.3.1
 
 - 将聊天/视频内容的持久未知防重身份与配置相关的成功缓存键分离；更改视觉/ASR超时、总期限、采样或音频选项及重载均不能重放未知请求，未知优先于旧成功缓存，SQLite事务保证跨实例准入。

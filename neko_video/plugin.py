@@ -9,6 +9,7 @@ from maibot_sdk import Command, HookHandler, MaiBotPlugin, Tool
 from maibot_sdk.types import ErrorPolicy, HookMode, HookOrder, ToolParameterInfo, ToolParamType
 
 from .config import Config
+from .chat_media import ChatMediaError, ChatMediaService
 from .credentials import CredentialService
 from .media_service import MediaService
 from .official import OfficialVideoService
@@ -44,6 +45,7 @@ class NekoVideoPlugin(MaiBotPlugin):
         self.credentials = None
         self.official = None
         self.media = None
+        self.chat_media = None
         self.poll_task = None
         self.tasks = set()
         self.lifecycle = asyncio.Lock()
@@ -66,6 +68,7 @@ class NekoVideoPlugin(MaiBotPlugin):
         self.official = OfficialVideoService(self.config.parse, self.credentials, self.client)
         self.media = MediaService(self.config, self.ctx)
         await self.media.start()
+        self.chat_media = ChatMediaService(self.ctx, self.config, self.media.assets)
         self.analyzer = VideoAnalyzer(
             self.config, self.media.assets, directory, self._visual_generate, self._transcribe_audio
         )
@@ -237,7 +240,7 @@ class NekoVideoPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 name="media_id",
                 param_type=ToolParamType.STRING,
-                description="本聊天视频/实况的media_id，仅配合analyze_video=true；不接受URL/路径/封面编号",
+                description="本聊天视频/实况的media_id（neko_video_read或neko_video_chat返回）；不接受URL/路径",
                 required=False,
             ),
             ToolParameterInfo(
@@ -295,6 +298,75 @@ class NekoVideoPlugin(MaiBotPlugin):
                 "content_items": [],
             }
         return await self.media.read(link, image_start, scope_of(kwargs))
+
+    async def _chat_message(self, stream_id, message_id):
+        """Read back one message dict of this chat; empty dict if unavailable."""
+        message_id = str(message_id or "").strip()
+        if not message_id or len(message_id) > 128:
+            return {}
+        try:
+            result = await self.ctx.call_capability(
+                "message.get_by_id",
+                chat_id=stream_id,
+                message_id=message_id,
+                include_binary_data=False,
+            )
+        except Exception:
+            return {}
+        if isinstance(result, list):
+            messages = result
+        elif isinstance(result, dict):
+            messages = result.get("messages") or result.get("message") or []
+            if isinstance(messages, dict):
+                messages = [messages]
+        else:
+            messages = []
+        for message in messages if isinstance(messages, list) else []:
+            if isinstance(message, dict) and str(message.get("session_id") or "") == stream_id:
+                return message
+        return {}
+
+    @Tool(
+        "neko_video_chat",
+        description="读取本聊天消息里直接发送的视频，返回media_id供分析或发送。",
+        timeout_ms=65000,
+        parameters=[
+            ToolParameterInfo(
+                name="source_message_id",
+                param_type=ToolParamType.STRING,
+                description="含视频的消息ID或上下文短编号",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="video_index",
+                param_type=ToolParamType.INTEGER,
+                description="同一消息里第几个视频，从0开始；只有一个时填0",
+                required=False,
+            ),
+        ],
+    )
+    async def chat_video(self, source_message_id="", video_index=0, **kwargs):
+        if not self.enabled() or not self.config.media.enabled:
+            return {"success": False, "content": "插件或媒体功能未启用"}
+        scope = scope_of(kwargs)
+        if not scope or not isinstance(source_message_id, str):
+            return {"success": False, "content": "缺少当前聊天或消息编号"}
+        message = await self._chat_message(scope, source_message_id)
+        if not message:
+            return {"success": False, "content": "找不到该消息；请让用户重新发送视频"}
+        try:
+            record = await self.chat_media.register(message, scope, video_index)
+        except ChatMediaError as exc:
+            return {"success": False, "content": str(exc)}
+        return {
+            "success": True,
+            "content": (
+                f"已登记聊天视频「{record['name']}」，media_id={record['media_id']}。"
+                "需要理解内容时用neko_video_read(analyze_video=true, media_id=...)；"
+                "需要发送时用neko_video_send。"
+            ),
+            **record,
+        }
 
     @Tool(
         "neko_video_send",
