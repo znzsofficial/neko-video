@@ -1,4 +1,5 @@
 """Chat-native video attachment registration; adapter API mocked, no network."""
+
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -51,7 +52,9 @@ class RegisterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_direct_url_registers_without_adapter_call(self):
         record = await self.service.register(
-            message_with([{"url": "https://cdn.example.com/v.mp4", "file": "clip.mp4", "file_size": 100}]),
+            message_with(
+                [{"url": "https://cdn.example.com/v.mp4", "file": "clip.mp4", "file_size": 100}]
+            ),
             "stream-a",
         )
         self.ctx.api.call.assert_not_awaited()
